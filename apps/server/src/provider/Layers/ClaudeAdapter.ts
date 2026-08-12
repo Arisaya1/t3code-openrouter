@@ -98,7 +98,13 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
-const PROVIDER = ProviderDriverKind.make("claudeAgent");
+/**
+ * Driver kind this adapter reports when the caller does not name one. The
+ * Claude Agent runtime backs more than one driver — `OpenRouterDriver` is the
+ * same runtime pointed at OpenRouter — so every adapter instance carries the
+ * kind of the driver that built it (see `ClaudeAdapterLiveOptions.driverKind`).
+ */
+const DEFAULT_PROVIDER = ProviderDriverKind.make("claudeAgent");
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 type ClaudeToolResultStreamKind = Extract<
   RuntimeContentStreamKind,
@@ -261,6 +267,12 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
 
 export interface ClaudeAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
+  /**
+   * Driver kind of the instance this adapter belongs to. Defaults to
+   * `claudeAgent`; `OpenRouterDriver` passes its own kind so session starts
+   * routed by driver kind are not rejected as a provider mismatch.
+   */
+  readonly driverKind?: ProviderDriverKind;
   readonly environment?: NodeJS.ProcessEnv;
   readonly createQuery?: (input: {
     readonly prompt: AsyncIterable<SDKUserMessage>;
@@ -1224,6 +1236,7 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     readonly fileSystem: FileSystem.FileSystem;
     readonly attachmentsDir: string;
     readonly boundInstanceId: ProviderInstanceId;
+    readonly provider: ProviderDriverKind;
   },
 ) {
   const text = buildPromptText(input, dependencies.boundInstanceId);
@@ -1240,7 +1253,7 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
 
     if (!SUPPORTED_CLAUDE_IMAGE_MIME_TYPES.has(attachment.mimeType)) {
       return yield* new ProviderAdapterRequestError({
-        provider: PROVIDER,
+        provider: dependencies.provider,
         method: "turn/start",
         detail: `Unsupported Claude image attachment type '${attachment.mimeType}'.`,
       });
@@ -1252,7 +1265,7 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     });
     if (!attachmentPath) {
       return yield* new ProviderAdapterRequestError({
-        provider: PROVIDER,
+        provider: dependencies.provider,
         method: "turn/start",
         detail: `Invalid attachment id '${attachment.id}'.`,
       });
@@ -1262,7 +1275,7 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
       Effect.mapError(
         (cause) =>
           new ProviderAdapterRequestError({
-            provider: PROVIDER,
+            provider: dependencies.provider,
             method: "turn/start",
             detail: "Failed to read attachment file.",
             cause,
@@ -1473,20 +1486,21 @@ function toolResultBlocksFromUserMessage(message: SDKMessage): Array<{
 }
 
 function toSessionError(
+  provider: ProviderDriverKind,
   threadId: ThreadId,
   cause: unknown,
 ): ProviderAdapterSessionNotFoundError | ProviderAdapterSessionClosedError | undefined {
   const normalized = toMessage(cause, "").toLowerCase();
   if (normalized.includes("unknown session") || normalized.includes("not found")) {
     return new ProviderAdapterSessionNotFoundError({
-      provider: PROVIDER,
+      provider,
       threadId,
       cause,
     });
   }
   if (normalized.includes("closed")) {
     return new ProviderAdapterSessionClosedError({
-      provider: PROVIDER,
+      provider,
       threadId,
       cause,
     });
@@ -1494,13 +1508,18 @@ function toSessionError(
   return undefined;
 }
 
-function toRequestError(threadId: ThreadId, method: string, cause: unknown): ProviderAdapterError {
-  const sessionError = toSessionError(threadId, cause);
+function toRequestError(
+  provider: ProviderDriverKind,
+  threadId: ThreadId,
+  method: string,
+  cause: unknown,
+): ProviderAdapterError {
+  const sessionError = toSessionError(provider, threadId, cause);
   if (sessionError) {
     return sessionError;
   }
   return new ProviderAdapterRequestError({
-    provider: PROVIDER,
+    provider,
     method,
     detail: `${method} failed`,
     cause,
@@ -1623,6 +1642,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   options?: ClaudeAdapterLiveOptions,
 ) {
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("claudeAgent");
+  // Everything this adapter emits — sessions, runtime events, errors — is
+  // stamped with the driver kind of the instance that built it, not with
+  // `claudeAgent` unconditionally. `ProviderService` routes by instance and
+  // then asserts the adapter agrees about its own driver kind.
+  const PROVIDER = options?.driverKind ?? DEFAULT_PROVIDER;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
@@ -4323,7 +4347,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       if (context.currentApiModelId !== apiModelId) {
         yield* Effect.tryPromise({
           try: () => context.query.setModel(apiModelId),
-          catch: (cause) => toRequestError(input.threadId, "turn/setModel", cause),
+          catch: (cause) => toRequestError(PROVIDER, input.threadId, "turn/setModel", cause),
         });
         context.currentApiModelId = apiModelId;
       }
@@ -4347,12 +4371,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (input.interactionMode === "plan") {
       yield* Effect.tryPromise({
         try: () => context.query.setPermissionMode("plan"),
-        catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
+        catch: (cause) => toRequestError(PROVIDER, input.threadId, "turn/setPermissionMode", cause),
       });
     } else if (input.interactionMode === "default") {
       yield* Effect.tryPromise({
         try: () => context.query.setPermissionMode(context.basePermissionMode ?? "default"),
-        catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
+        catch: (cause) => toRequestError(PROVIDER, input.threadId, "turn/setPermissionMode", cause),
       });
     }
 
@@ -4394,12 +4418,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       fileSystem,
       attachmentsDir: serverConfig.attachmentsDir,
       boundInstanceId,
+      provider: PROVIDER,
     });
 
     yield* Queue.offer(context.promptQueue, {
       type: "message",
       message,
-    }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)));
+    }).pipe(
+      Effect.mapError((cause) => toRequestError(PROVIDER, input.threadId, "turn/start", cause)),
+    );
 
     return {
       threadId: context.session.threadId,
@@ -4467,7 +4494,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       }
       yield* Effect.tryPromise({
         try: () => context.query.interrupt(),
-        catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
+        catch: (cause) => toRequestError(PROVIDER, threadId, "turn/interrupt", cause),
       });
     },
   );

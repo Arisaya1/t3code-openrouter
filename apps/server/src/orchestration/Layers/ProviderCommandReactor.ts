@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  isClaudeFamilyDriverKind,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -675,8 +676,11 @@ const make = Effect.gen(function* () {
         activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
       const previousModelSelection = threadModelSelections.get(threadId);
+      // Claude Code applies a model selection at session start, so a changed
+      // selection needs a fresh session. OpenRouter instances are the same CLI
+      // and need the same restart.
       const shouldRestartForModelSelectionChange =
-        preferredProvider === "claudeAgent" &&
+        isClaudeFamilyDriverKind(preferredProvider) &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
 

@@ -129,9 +129,18 @@ export type ModelCapabilities = typeof ModelCapabilities.Type;
 
 const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
+const OPENROUTER_DRIVER_KIND = ProviderDriverKind.make("openrouter");
 const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
+
+/**
+ * Drivers backed by the Claude Code CLI. `openrouter` is that same runtime
+ * pointed at OpenRouter's Anthropic-compatible endpoint, so behaviour keyed to
+ * "this instance is Claude Code" has to cover both kinds.
+ */
+export const isClaudeFamilyDriverKind = (driver: ProviderDriverKind | string): boolean =>
+  driver === CLAUDE_DRIVER_KIND || driver === OPENROUTER_DRIVER_KIND;
 
 export const DEFAULT_MODEL = "gpt-5.6-sol";
 
@@ -150,6 +159,13 @@ export const DEFAULT_TEXT_GENERATION_REASONING_EFFORT = "low";
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-sonnet-5",
+  // OpenRouter requires vendor-namespaced ids, so Anthropic's bare slugs do
+  // not round-trip: `claude-sonnet-5` is not a model OpenRouter knows. The
+  // driver runs the Claude Code CLI, whose system prompt and tool-calling are
+  // tuned for Anthropic-family models, so the default stays an Anthropic one.
+  // Without an entry here the lookup falls through to `DEFAULT_MODEL`, which
+  // is a Codex slug.
+  [OPENROUTER_DRIVER_KIND]: "anthropic/claude-sonnet-5",
   [CURSOR_DRIVER_KIND]: "auto",
   [GROK_DRIVER_KIND]: "grok-build",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
@@ -161,6 +177,9 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
 > = {
   [CODEX_DRIVER_KIND]: DEFAULT_TEXT_GENERATION_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-haiku-4-5",
+  // Namespaced, and a dot rather than dashes — OpenRouter's id for this model
+  // is `anthropic/claude-haiku-4.5`, not Anthropic's `claude-haiku-4-5`.
+  [OPENROUTER_DRIVER_KIND]: "anthropic/claude-haiku-4.5",
   [CURSOR_DRIVER_KIND]: "composer-2",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
 };
@@ -219,6 +238,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
 export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>> = {
   [CODEX_DRIVER_KIND]: "Codex",
   [CLAUDE_DRIVER_KIND]: "Claude",
+  [OPENROUTER_DRIVER_KIND]: "OpenRouter",
   [CURSOR_DRIVER_KIND]: "Cursor",
   [GROK_DRIVER_KIND]: "Grok",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
