@@ -40,6 +40,22 @@ export interface ProviderClientDefinition {
    * built-in default or custom — advertises the same marker.
    */
   readonly badgeLabel?: string;
+  /**
+   * Declared by drivers whose whole configuration is one API key. The instance
+   * card renders a dedicated, labelled field for it instead of leaving the user
+   * to discover the variable name and add it as a generic environment variable.
+   *
+   * Storage is unchanged — the field reads and writes `variable` in the
+   * instance's environment list, so a key added either way behaves identically.
+   */
+  readonly credential?: {
+    /** Environment variable the driver reads the key from. */
+    readonly variable: string;
+    readonly label: string;
+    readonly description: string;
+    /** Where to obtain a key. Rendered as a link beside the field. */
+    readonly issueUrl?: string;
+  };
 }
 
 export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
@@ -60,6 +76,13 @@ export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = 
     label: "OpenRouter",
     icon: OpenRouterIcon,
     settingsSchema: ClaudeSettings,
+    credential: {
+      variable: "OPENROUTER_API_KEY",
+      label: "OpenRouter API key",
+      description:
+        "Used for every model this instance runs. Stored separately from settings and never returned to the app after saving.",
+      issueUrl: "https://openrouter.ai/keys",
+    },
   },
   {
     value: ProviderDriverKind.make("cursor"),
