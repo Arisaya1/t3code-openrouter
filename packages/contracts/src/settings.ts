@@ -601,6 +601,13 @@ export const ServerSettings = Schema.Struct({
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    // OpenRouter runs the Claude Code CLI against OpenRouter's
+    // Anthropic-compatible endpoint, so it is configured by `ClaudeSettings`
+    // (binary path, home path, …) exactly like `claudeAgent`. It needs its own
+    // key here regardless: `deriveProviderInstanceConfigMap` only materializes
+    // a default instance for a built-in driver that has an entry in this
+    // struct, so without it the driver registers but never surfaces in the UI.
+    openrouter: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -744,6 +751,9 @@ export const ServerSettingsPatch = Schema.Struct({
       cursor: Schema.optionalKey(CursorSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
+      // Shares `ClaudeSettingsPatch` for the same reason the full struct above
+      // shares `ClaudeSettings` — same CLI, different endpoint.
+      openrouter: Schema.optionalKey(ClaudeSettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual

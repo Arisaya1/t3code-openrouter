@@ -32,6 +32,9 @@ export function formatProviderDisplayName(provider: string | null | undefined): 
     case "claudeAgent":
     case "claude":
       return "Claude";
+    case "openrouter":
+      // The default branch would title-case this to "Openrouter".
+      return "OpenRouter";
     case "codex":
       return "Codex";
     case "cursor":

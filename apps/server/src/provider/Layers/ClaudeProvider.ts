@@ -795,6 +795,17 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   ) => Effect.Effect<ClaudeCapabilitiesProbe | undefined>,
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
+  /**
+   * Built-in catalogue this instance advertises, replacing the Claude one.
+   * `OpenRouterDriver` supplies OpenRouter's namespaced slugs, which are the
+   * only ids that resolve against its endpoint. Resolved by the caller because
+   * fetching it is asynchronous and cached per instance.
+   *
+   * The Claude CLI version gating below is deliberately skipped for an
+   * overridden catalogue: it encodes which models a given `claude` build may
+   * request from Anthropic, which says nothing about what a gateway serves.
+   */
+  builtInModelsOverride?: ReadonlyArray<ServerProviderModel>,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -803,7 +814,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const allModels = providerModelsFromSettings(
-    BUILT_IN_MODELS,
+    builtInModelsOverride ?? BUILT_IN_MODELS,
     claudeSettings.customModels,
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
   );
@@ -893,7 +904,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   }
 
   const models = providerModelsFromSettings(
-    getBuiltInClaudeModelsForVersion(parsedVersion),
+    builtInModelsOverride ?? getBuiltInClaudeModelsForVersion(parsedVersion),
     claudeSettings.customModels,
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
   );
