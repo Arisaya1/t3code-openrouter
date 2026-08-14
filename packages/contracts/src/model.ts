@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
 export const ProviderOptionDescriptorType = Schema.Literals(["select", "boolean"]);
@@ -124,6 +124,16 @@ function canonicalSelectionsToLegacyObject(
 
 export const ModelCapabilities = Schema.Struct({
   optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
+  /**
+   * The model's real context window in tokens, when the provider publishes one
+   * as a plain figure. Populated from OpenRouter's per-model `context_length`.
+   *
+   * Distinct from the Claude catalogue's `contextWindow` option descriptor,
+   * which is a user-selectable Anthropic setting (`200k` / `1m`) rather than a
+   * fact about the model, and so stays where it is. A driver that offers the
+   * descriptor does not set this field, and vice versa.
+   */
+  contextLength: Schema.optional(PositiveInt),
 });
 export type ModelCapabilities = typeof ModelCapabilities.Type;
 

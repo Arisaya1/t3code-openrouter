@@ -19,9 +19,12 @@ export interface SelectableModelOption {
 
 export function createModelCapabilities(input: {
   optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  /** Omitted unless the provider publishes a real window; never guessed. */
+  contextLength?: number | undefined;
 }): ModelCapabilities {
   return {
     optionDescriptors: input.optionDescriptors.map(cloneDescriptor),
+    ...(input.contextLength !== undefined ? { contextLength: input.contextLength } : {}),
   };
 }
 

@@ -161,6 +161,9 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly driverKind?: ProviderDriverKind;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly modelContextWindows?: Readonly<Record<string, number>>;
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -170,8 +173,16 @@ function makeHarness(config?: {
       }
     | undefined;
 
+  const modelContextWindows = config?.modelContextWindows;
   const adapterOptions: ClaudeAdapterLiveOptions = {
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
+    ...(config?.driverKind ? { driverKind: config.driverKind } : {}),
+    ...(config?.environment ? { environment: config.environment } : {}),
+    ...(modelContextWindows
+      ? {
+          resolveModelContextWindow: (model: string) => Effect.succeed(modelContextWindows[model]),
+        }
+      : {}),
     createQuery: (input) => {
       createInput = input;
       return query;
@@ -461,6 +472,144 @@ describe("ClaudeAdapterLive", () => {
         createInput?.options.env?.CLAUDE_CONFIG_DIR,
         NodePath.join(NodeOS.homedir(), ".claude-work"),
       );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("spawns with the selected model's published context window", () => {
+    const harness = makeHarness({
+      modelContextWindows: { "moonshotai/kimi-k3": 262_144 },
+      driverKind: ProviderDriverKind.make("openrouter"),
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("openrouter"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "moonshotai/kimi-k3",
+        ),
+        runtimeMode: "full-access",
+      });
+
+      // Without this the CLI does not recognize the slug and auto-compacts at
+      // the 200k it assumes, whatever the model's real window.
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "262144");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("leaves the context window unset for a model the catalogue does not list", () => {
+    const harness = makeHarness({
+      modelContextWindows: { "moonshotai/kimi-k3": 262_144 },
+      driverKind: ProviderDriverKind.make("openrouter"),
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("openrouter"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "vendor/unlisted",
+        ),
+        runtimeMode: "full-access",
+      });
+
+      // No published figure means no claim: the CLI keeps its own assumption
+      // rather than inheriting the previous thread's number.
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps a CLAUDE_CODE_MAX_CONTEXT_TOKENS the user configured", () => {
+    const harness = makeHarness({
+      environment: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: "120000" },
+      modelContextWindows: { "moonshotai/kimi-k3": 262_144 },
+      driverKind: ProviderDriverKind.make("openrouter"),
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("openrouter"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "moonshotai/kimi-k3",
+        ),
+        runtimeMode: "full-access",
+      });
+
+      // An explicit setting is a deliberate override — commonly a cost or
+      // latency ceiling below what the model can actually take.
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "120000");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("replaces a blank CLAUDE_CODE_MAX_CONTEXT_TOKENS with the published window", () => {
+    const harness = makeHarness({
+      environment: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: "  " },
+      modelContextWindows: { "moonshotai/kimi-k3": 262_144 },
+      driverKind: ProviderDriverKind.make("openrouter"),
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("openrouter"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "moonshotai/kimi-k3",
+        ),
+        runtimeMode: "full-access",
+      });
+
+      // Blank is not a setting: the CLI reads it as malformed and falls back to
+      // its assumption, which is the state this plumbing exists to fix.
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "262144");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps Anthropic's own context-window option ahead of a catalogue figure", () => {
+    const harness = makeHarness({
+      modelContextWindows: { "claude-opus-4-6": 262_144 },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-6",
+          [{ id: "contextWindow", value: "1m" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      // The `[1m]` suffix is what was actually requested of the API, so the
+      // session must not be told it has a different window.
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.model, "claude-opus-4-6[1m]");
+      assert.equal(createInput?.options.env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS, undefined);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

@@ -287,19 +287,6 @@ const makeClaudeFamilyDriver = <TCredentials>(options: {
           continuationGroupKey,
         });
 
-        const adapterOptions = {
-          instanceId,
-          // Without this the adapter reports `claudeAgent` for every instance,
-          // and `ProviderService.startSession` — which routes by instance and
-          // passes the instance's driver kind — rejects every OpenRouter
-          // session start as a provider mismatch.
-          driverKind: DRIVER_KIND,
-          environment: processEnv,
-          ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
-        };
-        const adapter = yield* makeClaudeAdapter(effectiveConfig, adapterOptions);
-        const textGeneration = yield* makeClaudeTextGeneration(effectiveConfig, processEnv);
-
         // Per-instance capabilities cache: keyed on binary + resolved HOME so
         // account-specific probes never share auth metadata across instances.
         const capabilitiesProbeCache = yield* Cache.make({
@@ -314,7 +301,8 @@ const makeClaudeFamilyDriver = <TCredentials>(options: {
 
         // Model catalogue cache. `resolveBuiltInModels` never fails — it falls
         // back to a static list internally — so a catalogue lookup can't take
-        // the instance offline.
+        // the instance offline. Built before the adapter because the adapter
+        // reads context windows out of it (see `resolveModelContextWindow`).
         const resolveBuiltInModels = options.resolveBuiltInModels;
         const modelCatalogCache = resolveBuiltInModels
           ? yield* Cache.make({
@@ -326,6 +314,37 @@ const makeClaudeFamilyDriver = <TCredentials>(options: {
                 ),
             })
           : undefined;
+
+        // The catalogue's published window for whichever model a thread picks,
+        // so the spawned CLI gets a real auto-compact threshold instead of its
+        // 200k assumption. Shares the health check's cache, so a session start
+        // costs a lookup rather than an HTTP round trip. Drivers without a
+        // catalogue (plain Claude) pass nothing and keep the CLI's own numbers;
+        // so does a slug the catalogue does not list, such as a custom model.
+        const resolveModelContextWindow = modelCatalogCache
+          ? (model: string): Effect.Effect<number | undefined> =>
+              Cache.get(modelCatalogCache, "catalog").pipe(
+                Effect.map(
+                  (models) =>
+                    models.find((candidate) => candidate.slug === model)?.capabilities
+                      ?.contextLength,
+                ),
+              )
+          : undefined;
+
+        const adapterOptions = {
+          instanceId,
+          // Without this the adapter reports `claudeAgent` for every instance,
+          // and `ProviderService.startSession` — which routes by instance and
+          // passes the instance's driver kind — rejects every OpenRouter
+          // session start as a provider mismatch.
+          driverKind: DRIVER_KIND,
+          environment: processEnv,
+          ...(resolveModelContextWindow ? { resolveModelContextWindow } : {}),
+          ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+        };
+        const adapter = yield* makeClaudeAdapter(effectiveConfig, adapterOptions);
+        const textGeneration = yield* makeClaudeTextGeneration(effectiveConfig, processEnv);
 
         // Credential cache. Keyed trivially: `processEnv` is fixed for the life
         // of the instance, and the registry rebuilds the instance when its

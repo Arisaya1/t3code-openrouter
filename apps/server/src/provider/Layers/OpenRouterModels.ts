@@ -31,6 +31,10 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
  * `effort` / `contextWindow` descriptors are Anthropic-CLI concepts and mean
  * nothing to a Qwen or DeepSeek model served through the same gateway, so no
  * OpenRouter entry claims to support them.
+ *
+ * `contextLength` is layered on per model in {@link toProviderModel} when
+ * OpenRouter publishes one — it is a fact about the model, not an option the
+ * user picks.
  */
 const OPENROUTER_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -53,6 +57,12 @@ export const OPENROUTER_DEFAULT_MODEL = "anthropic/claude-sonnet-5";
  * Used when the catalogue request fails (offline, DNS, OpenRouter down). Small
  * and deliberately opinionated — enough to start a session, not a mirror of the
  * live list. Anything missing can still be added as a custom model.
+ *
+ * Deliberately carries no context lengths. A window from this list would be a
+ * remembered number rather than a reported one, and it is used as the spawned
+ * CLI's auto-compact threshold — a stale figure there truncates sessions early
+ * or overflows the model. With none, the CLI keeps its own 200k assumption,
+ * which is the behaviour these entries already had.
  */
 const OPENROUTER_FALLBACK_MODEL_IDS: ReadonlyArray<readonly [string, string]> = [
   ["anthropic/claude-sonnet-5", "Anthropic: Claude Sonnet 5"],
@@ -70,6 +80,10 @@ const OpenRouterModelsResponse = Schema.Struct({
     Schema.Struct({
       id: Schema.String,
       name: Schema.optional(Schema.String),
+      // Nullable as well as optional: OpenRouter sends `null` for entries whose
+      // window it has not recorded. Decoding the whole catalogue is all-or-
+      // nothing — a stricter schema here would drop every model over one null.
+      context_length: Schema.optional(Schema.NullOr(Schema.Number)),
     }),
   ),
 });
@@ -105,15 +119,34 @@ function splitModelName(
   };
 }
 
-function toProviderModel(id: string, name: string | undefined): ServerProviderModel {
+/**
+ * A window only counts when it arrives as a positive integer. Anything else —
+ * absent, null, zero, fractional, negative — yields undefined rather than a
+ * coerced number: this figure becomes the spawned CLI's auto-compact threshold,
+ * and no window at all (the CLI's own 200k assumption) beats a wrong one.
+ */
+function toContextLength(value: number | null | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 1) return undefined;
+  return Math.floor(value);
+}
+
+function toProviderModel(
+  id: string,
+  name: string | undefined,
+  contextLength?: number | null | undefined,
+): ServerProviderModel {
   const split = splitModelName(id, name);
+  const window = toContextLength(contextLength);
   return {
     slug: id,
     name: split.name,
     ...(split.subProvider ? { subProvider: split.subProvider } : {}),
     isCustom: false,
     ...(id === OPENROUTER_DEFAULT_MODEL ? { isDefault: true } : {}),
-    capabilities: OPENROUTER_MODEL_CAPABILITIES,
+    capabilities:
+      window === undefined
+        ? OPENROUTER_MODEL_CAPABILITIES
+        : { ...OPENROUTER_MODEL_CAPABILITIES, contextLength: window },
   };
 }
 
@@ -155,7 +188,7 @@ export const fetchOpenRouterModels = Effect.fn("fetchOpenRouterModels")(
 
     const models = result.success.data
       .filter((model) => isSelectableModelId(model.id))
-      .map((model) => toProviderModel(model.id, model.name))
+      .map((model) => toProviderModel(model.id, model.name, model.context_length))
       .toSorted(compareModels);
 
     // An empty or fully-filtered response is a broken catalogue, not a valid
