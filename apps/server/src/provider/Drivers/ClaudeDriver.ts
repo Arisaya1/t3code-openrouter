@@ -46,6 +46,10 @@ import {
   makePendingClaudeProvider,
   probeClaudeCapabilities,
 } from "../Layers/ClaudeProvider.ts";
+import {
+  applyOpenRouterCredentialCheck,
+  checkOpenRouterCredentials,
+} from "../Layers/OpenRouterAuth.ts";
 import { fetchOpenRouterModels } from "../Layers/OpenRouterModels.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
@@ -77,6 +81,12 @@ const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
  * order of days, and the health check runs every few minutes by default.
  */
 const MODEL_CATALOG_TTL = Duration.minutes(30);
+
+/**
+ * Shorter than the model catalogue: a key's credit can run out mid-session, and
+ * that is precisely the state this check exists to surface.
+ */
+const CREDENTIAL_PROBE_TTL = Duration.minutes(5);
 
 /**
  * OpenRouter's Anthropic-compatible endpoint base URL, as documented in
@@ -142,7 +152,7 @@ const makeOpenRouterProcessEnv = (base: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
   return next;
 };
 
-const makeClaudeFamilyDriver = (options: {
+const makeClaudeFamilyDriver = <TCredentials>(options: {
   readonly driverKind: string;
   readonly displayName: string;
   /**
@@ -169,6 +179,22 @@ const makeClaudeFamilyDriver = (options: {
     never,
     HttpClient.HttpClient
   >;
+  /**
+   * Gateway-side credential check, folded into the status the local CLI probe
+   * produced. Only the OpenRouter variant sets this.
+   *
+   * The CLI probe reports whether `claude` is installed and holds *a* token; for
+   * a gateway instance it never asks the gateway whether that token is any good,
+   * so a dead key reads as "Authenticated" until a session fails on it. `check`
+   * is cached on a short TTL and must not fail — an unreachable gateway is not
+   * evidence of a bad key, and the instance should not go offline over it.
+   */
+  readonly credentials?: {
+    readonly check: (
+      environment: NodeJS.ProcessEnv,
+    ) => Effect.Effect<TCredentials, never, HttpClient.HttpClient>;
+    readonly apply: (draft: ServerProviderDraft, credentials: TCredentials) => ServerProviderDraft;
+  };
 }): ProviderDriver<ClaudeSettings, ClaudeDriverEnv> => {
   const DRIVER_KIND = ProviderDriverKind.make(options.driverKind);
 
@@ -301,17 +327,35 @@ const makeClaudeFamilyDriver = (options: {
             })
           : undefined;
 
+        // Credential cache. Keyed trivially: `processEnv` is fixed for the life
+        // of the instance, and the registry rebuilds the instance when its
+        // settings change, so a key edited in the UI takes effect immediately
+        // rather than waiting out this TTL.
+        const credentials = options.credentials;
+        const credentialCache = credentials
+          ? yield* Cache.make({
+              capacity: 1,
+              timeToLive: CREDENTIAL_PROBE_TTL,
+              lookup: () =>
+                credentials
+                  .check(processEnv)
+                  .pipe(Effect.provideService(HttpClient.HttpClient, httpClient)),
+            })
+          : undefined;
+
         const checkProvider = Effect.gen(function* () {
           const builtInModels = modelCatalogCache
             ? yield* Cache.get(modelCatalogCache, "catalog")
             : undefined;
-          return yield* checkClaudeProviderStatus(
+          const draft = yield* checkClaudeProviderStatus(
             effectiveConfig,
             () => Cache.get(capabilitiesProbeCache, capabilitiesCacheKey),
             processEnv,
             cwd,
             builtInModels,
           );
+          if (!credentials || !credentialCache) return draft;
+          return credentials.apply(draft, yield* Cache.get(credentialCache, "credentials"));
         }).pipe(
           Effect.map(stampIdentity),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -384,4 +428,8 @@ export const OpenRouterDriver = makeClaudeFamilyDriver({
   continuationNamespace: "openrouter",
   defaultProcessEnv: makeOpenRouterProcessEnv,
   resolveBuiltInModels: fetchOpenRouterModels,
+  credentials: {
+    check: checkOpenRouterCredentials,
+    apply: applyOpenRouterCredentialCheck,
+  },
 });

@@ -71,22 +71,59 @@ curl -s https://openrouter.ai/api/v1/models | jq -r '.data[].id' | sort
 
 ## Verify
 
-Check the key first — this is the failure people actually hit, and it looks identical to a
-misconfigured driver:
+The provider card in Settings checks the key itself, so the common failures name themselves:
+
+| Card shows                                   | Meaning                                                                               |
+| -------------------------------------------- | ------------------------------------------------------------------------------------- |
+| **Authenticated**, with a key label          | OpenRouter accepted the key. Credit remaining is shown when the key has a limit.      |
+| **No OpenRouter API key** (warning)          | Nothing reached the instance — set `OPENROUTER_API_KEY`.                              |
+| **OpenRouter rejected this API key** (error) | Mistyped, revoked, or out of credit. Check <https://openrouter.ai/keys>.              |
+| **Could not reach OpenRouter**               | The verification request failed. Says nothing about the key; sessions may still work. |
+
+That status comes from `GET /api/v1/key`, re-checked every 5 minutes and immediately when you
+edit the instance. Note the distinction: the _installed / version_ part of the card still
+describes the local `claude` binary, so a green card means both the binary and the key are
+good.
+
+To check a key outside the app:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/key
 ```
 
-`200` means the key is good. `401` means the key is invalid, revoked, or out of credit — the
-provider will show as **Authenticated** in Settings regardless, because that status comes
-from probing the local `claude` binary and never contacts OpenRouter. If this returns 401
-while the unauthenticated `/v1/models` call above succeeds, the problem is the key, not the
-endpoint and not T3 Code.
+`200` means the key is good. If this returns 401 while the unauthenticated `/v1/models` call
+above succeeds, the problem is the key — not the endpoint and not T3 Code.
 
 Then open a session on the OpenRouter provider and run `/status` — the Anthropic base URL
 should read `https://openrouter.ai/api`. The OpenRouter activity dashboard also shows
 requests from your API key.
+
+## Context Windows On Non-Anthropic Models
+
+Claude Code only knows the context window of models it ships knowledge of. Pick, say,
+`moonshotai/kimi-k3` and it says so on the first turn:
+
+```text
+"moonshotai/kimi-k3" is not a model this version of Claude Code recognizes, so
+auto-compact will keep this session within 200k tokens (the context window it assumes).
+```
+
+The session works — this is a warning, not an error — but auto-compact will compact at 200k
+even on a model with a much larger window. To use the real window, set it on the instance:
+
+```text
+CLAUDE_CODE_MAX_CONTEXT_TOKENS  262144
+```
+
+Each model's true `context_length` is in the catalogue:
+
+```bash
+curl -s https://openrouter.ai/api/v1/models | jq -r '.data[] | "\(.id)\t\(.context_length)"'
+```
+
+Because that variable is per-instance and the model is per-thread, an instance whose threads
+span models with different windows should be set to the smallest of them, or split into one
+instance per model. Anthropic slugs need none of this — they are recognized.
 
 ## Notes
 
