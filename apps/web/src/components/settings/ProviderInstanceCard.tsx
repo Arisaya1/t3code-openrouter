@@ -131,6 +131,29 @@ export function deriveProviderModelsForDisplay(input: {
   return [...serverModels, ...customModels];
 }
 
+/**
+ * Split an instance's environment into the driver's API key and everything
+ * else, so the dedicated key field and the generic table each edit their own
+ * half without clobbering the other's on write-back.
+ *
+ * `findLast` mirrors the server's own precedence rule: a duplicated variable
+ * resolves to the last occurrence, so that is the one the field must show.
+ */
+export function partitionProviderCredential(
+  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
+  credentialVariableName: string | undefined,
+): {
+  readonly credential: ProviderInstanceEnvironmentVariable | undefined;
+  readonly rest: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
+} {
+  const all = environment ?? [];
+  if (credentialVariableName === undefined) return { credential: undefined, rest: all };
+  return {
+    credential: all.findLast((variable) => variable.name === credentialVariableName),
+    rest: all.filter((variable) => variable.name !== credentialVariableName),
+  };
+}
+
 function ProviderAuthEmail(props: {
   readonly email: string | undefined;
   readonly prefix?: string;
@@ -150,6 +173,74 @@ function ProviderAuthEmail(props: {
         hideTooltip="Click to hide email"
       />
     </span>
+  );
+}
+
+/**
+ * Dedicated editor for a driver's single API key, for drivers that declare one.
+ *
+ * The value lives in the same environment list as everything else — this is a
+ * labelled front door to one well-known variable, not a separate store. The
+ * generic table below it hides that variable so there is only ever one editor
+ * for the value.
+ */
+function ProviderCredentialField(props: {
+  readonly instanceId: string;
+  readonly credential: NonNullable<DriverOption["credential"]>;
+  readonly value: ProviderInstanceEnvironmentVariable | undefined;
+  readonly onChange: (value: ProviderInstanceEnvironmentVariable | undefined) => void;
+}) {
+  const fieldId = `provider-instance-${props.instanceId}-credential`;
+  const isStored = props.value?.valueRedacted === true;
+
+  return (
+    <div>
+      <label htmlFor={fieldId} className="block">
+        <span className="flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-foreground">{props.credential.label}</span>
+          {props.credential.issueUrl ? (
+            <a
+              href={props.credential.issueUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              Get a key
+            </a>
+          ) : null}
+        </span>
+        <DraftInput
+          id={fieldId}
+          className="mt-1.5"
+          // A stored secret is never sent back to the app, so there is nothing
+          // to show and nothing to edit in place — only replace.
+          value={isStored ? "" : (props.value?.value ?? "")}
+          onCommit={(next) => {
+            const trimmed = next.trim();
+            if (trimmed.length === 0) {
+              // Blanking the field while a secret is stored would silently clear
+              // a working key on any incidental blur, so keep it. Removing the
+              // key is done from the environment table.
+              if (isStored) return;
+              props.onChange(undefined);
+              return;
+            }
+            props.onChange({
+              name: props.credential.variable,
+              value: trimmed,
+              sensitive: true,
+            });
+          }}
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={isStored ? "Stored secret - enter a new value to replace" : "sk-or-v1-..."}
+        />
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {props.credential.description}
+        </span>
+      </label>
+    </div>
   );
 }
 
@@ -491,6 +582,15 @@ export function ProviderInstanceCard({
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   };
 
+  // The API key is edited through its own field, so it is split out of the list
+  // the generic table renders. Both editors write back the whole list, so each
+  // has to carry the other's half through unchanged.
+  const credential = driverOption?.credential;
+  const { credential: credentialVariable, rest: otherEnvironment } = partitionProviderCredential(
+    instance.environment,
+    credential?.variable,
+  );
+
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
     const { environment: _omit, ...rest } = instance;
@@ -757,10 +857,23 @@ export function ProviderInstanceCard({
               />
             </div>
 
+            {credential ? (
+              <ProviderCredentialField
+                instanceId={instanceId}
+                credential={credential}
+                value={credentialVariable}
+                onChange={(next) =>
+                  updateEnvironment(next ? [...otherEnvironment, next] : otherEnvironment)
+                }
+              />
+            ) : null}
+
             <div>
               <ProviderEnvironmentSection
-                environment={instance.environment ?? []}
-                onChange={updateEnvironment}
+                environment={otherEnvironment}
+                onChange={(next) =>
+                  updateEnvironment(credentialVariable ? [...next, credentialVariable] : next)
+                }
               />
             </div>
 

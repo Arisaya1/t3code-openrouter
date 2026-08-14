@@ -24,11 +24,22 @@ regular Anthropic login, a proxy, or another gateway, a "default" would lose —
 would ship your `sk-or-` token to a host that can't authenticate it and fail with a bare 401. Pointing at OpenRouter is the entire reason this driver is separate from Claude, so the
 surrounding environment doesn't get a vote.
 
-So the only thing you must provide is your OpenRouter API key, either:
+So the only thing you must provide is your OpenRouter API key. Expand the instance and paste
+it into the **OpenRouter API key** field — it sits under Accent color, is masked as you type,
+and links out to <https://openrouter.ai/keys>. That is the whole setup.
 
-- in the instance's **Environment variables** section as `OPENROUTER_API_KEY` (recommended,
-  mark it **Sensitive**), or
-- as a machine/user environment variable named `OPENROUTER_API_KEY`.
+The field is a front door to the `OPENROUTER_API_KEY` environment variable, not a separate
+store, so these are all equivalent and any one of them works:
+
+- the **OpenRouter API key** field (recommended),
+- an `OPENROUTER_API_KEY` row added by hand in **Environment variables**,
+- a machine/user environment variable named `OPENROUTER_API_KEY`.
+
+A key set on the instance beats an ambient one. Saved keys are write-only: the field shows
+`Stored secret - enter a new value to replace` rather than the value, because secrets are
+stored apart from settings and never returned to the app. To clear one, delete its row in
+**Environment variables** — blanking the field does not delete a stored secret, so a stray
+click cannot wipe a working key.
 
 Per-instance environment variables are merged last and still win, so you can point the same
 instance at another Anthropic-compatible router by setting `ANTHROPIC_BASE_URL` on it. That
