@@ -50,6 +50,33 @@ describe("scan cache round trip", () => {
     expect(restored.get("/b.jsonl")).toEqual(original.get("/b.jsonl"));
   });
 
+  it("restores per-record OpenRouter attribution inside a claude file", () => {
+    // The file was parsed by the Claude parser, but only some of its records
+    // were billed by Anthropic. A warm hit that re-stamped them all with the
+    // file's provider would report OpenRouter spend as Claude Code again.
+    const original = cacheWith([
+      [
+        "/a.jsonl",
+        100,
+        [
+          record(),
+          record({
+            provider: "openrouter",
+            model: "openai/gpt-5.6-luna",
+            dedupeKey: "msg_2:",
+          }),
+        ],
+      ],
+    ]);
+
+    const restored = decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))));
+
+    expect(restored.get("/a.jsonl")?.records.map((entry) => entry.provider)).toEqual([
+      "claude",
+      "openrouter",
+    ]);
+  });
+
   it("interns repeated model and session strings", () => {
     const encoded = encodeScanCache(
       cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" }), record()]]]),

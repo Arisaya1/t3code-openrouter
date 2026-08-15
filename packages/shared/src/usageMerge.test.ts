@@ -140,6 +140,54 @@ describe("mergeUsage", () => {
     ]);
   });
 
+  it("keeps OpenRouter buckets read from the Claude transcript directory", () => {
+    // OpenRouter has no transcript home of its own: it drives the Claude Code
+    // CLI, so its buckets are scanned under the claude source. Matching bucket
+    // provider against source provider directly dropped every one of them.
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({ costUsd: 6 }),
+              bucket({ provider: "openrouter", model: "openai/gpt-5.6-luna", costUsd: 4 }),
+            ],
+            [{ provider: "claude", hostId: "mac", homePath: "/home/theo/.claude" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(10);
+    expect(merged.providers.map((provider) => provider.provider)).toEqual(["claude", "openrouter"]);
+    expect(merged.providers.find((provider) => provider.provider === "openrouter")?.costShare).toBe(
+      0.4,
+    );
+  });
+
+  it("drops OpenRouter buckets along with the claude source they came from", () => {
+    // The flip side: a duplicated claude home must take its OpenRouter buckets
+    // with it, or the deduplicated environment double counts them.
+    const shared = { provider: "claude" as const, hostId: "mac", homePath: "/home/theo/.claude" };
+    const openRouterBucket = bucket({
+      provider: "openrouter" as const,
+      model: "openai/gpt-5.6-luna",
+      costUsd: 4,
+    });
+    const merged = mergeUsage(
+      [
+        environment("env-a", summary([openRouterBucket], [shared])),
+        environment("env-b", summary([openRouterBucket], [shared])),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(4);
+    expect(merged.contributingEnvironments).toEqual(["env-a"]);
+  });
+
   it("excludes an environment reporting an older contract version", () => {
     const merged = mergeUsage(
       [

@@ -13,6 +13,8 @@ function claudeLine(overrides: {
   contentType: string;
   model?: string;
   outputTokens?: number;
+  /** OpenRouter names the upstream that served the turn; Anthropic omits it. */
+  upstreamProvider?: unknown;
 }): string {
   return JSON.stringify({
     type: "assistant",
@@ -24,6 +26,7 @@ function claudeLine(overrides: {
       role: "assistant",
       model: overrides.model ?? "claude-fable-5",
       content: [{ type: overrides.contentType }],
+      ...(overrides.upstreamProvider === undefined ? {} : { provider: overrides.upstreamProvider }),
       usage: {
         input_tokens: 2,
         cache_creation_input_tokens: 66818,
@@ -64,6 +67,65 @@ describe("parseClaudeLine", () => {
   it("ignores records that are not assistant messages", () => {
     expect(parseClaudeLine(JSON.stringify({ type: "user", message: {} }))).toBeNull();
     expect(parseClaudeLine("not json")).toBeNull();
+  });
+
+  // An OpenRouter instance runs this same CLI against OpenRouter's
+  // Anthropic-compatible endpoint, so its turns land in the Claude transcript
+  // home. Before this, every one of them was reported as Claude Code spend.
+  it("attributes namespaced models to OpenRouter", () => {
+    for (const model of [
+      "openai/gpt-5.6-luna",
+      "anthropic/claude-sonnet-5",
+      "moonshotai/kimi-k3",
+    ]) {
+      const record = parseClaudeLine(
+        claudeLine({ messageId: "msg_3", contentType: "text", model }),
+      );
+
+      expect(record?.provider, model).toBe("openrouter");
+      // The id is kept verbatim: pricing strips the vendor prefix itself, and
+      // the table needs to show which OpenRouter slug was actually billed.
+      expect(record?.model, model).toBe(model);
+    }
+  });
+
+  it("attributes a bare model to OpenRouter when the upstream provider is named", () => {
+    // The decisive mark: OpenRouter annotates every response with whoever
+    // served it. A bare slug alone would have been read as Anthropic's own.
+    const record = parseClaudeLine(
+      claudeLine({
+        messageId: "msg_4",
+        contentType: "text",
+        model: "kimi-k3",
+        upstreamProvider: "Moonshot AI",
+      }),
+    );
+
+    expect(record?.provider).toBe("openrouter");
+  });
+
+  it("keeps Anthropic's own model ids on Claude Code", () => {
+    for (const model of [
+      "claude-opus-5",
+      "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "claude-sonnet-4@20250514",
+    ]) {
+      const record = parseClaudeLine(
+        claudeLine({ messageId: "msg_5", contentType: "text", model }),
+      );
+
+      expect(record?.provider, model).toBe("claude");
+    }
+  });
+
+  it("does not read a malformed provider mark as OpenRouter", () => {
+    for (const upstreamProvider of ["", "   ", 7, null, {}]) {
+      const record = parseClaudeLine(
+        claudeLine({ messageId: "msg_6", contentType: "text", upstreamProvider }),
+      );
+
+      expect(record?.provider, JSON.stringify(upstreamProvider)).toBe("claude");
+    }
   });
 });
 

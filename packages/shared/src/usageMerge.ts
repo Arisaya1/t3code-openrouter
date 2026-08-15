@@ -131,6 +131,21 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
   return { ownerByFingerprint, duplicates };
 }
 
+/**
+ * Which scanned source a bucket's tokens were read from.
+ *
+ * Buckets are attributed to whoever billed them, but sources identify transcript
+ * directories, and OpenRouter has none of its own: it drives the Claude Code CLI
+ * and writes into the Claude home. Matching bucket provider against source
+ * provider directly would find no owner for an OpenRouter bucket and silently
+ * drop every one of them from the page.
+ */
+const SOURCE_PROVIDER: Record<UsageProviderKind, UsageProviderKind> = {
+  claude: "claude",
+  codex: "codex",
+  openrouter: "claude",
+};
+
 /** Sources this environment owns after fingerprint claims, plus their buckets. */
 function ownedContribution(
   environment: EnvironmentUsage,
@@ -149,7 +164,9 @@ function ownedContribution(
     }
   }
   return {
-    buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
+    buckets: environment.summary.buckets.filter((bucket) =>
+      ownedProviders.has(SOURCE_PROVIDER[bucket.provider]),
+    ),
     sessions,
   };
 }

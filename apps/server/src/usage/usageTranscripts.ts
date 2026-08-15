@@ -76,6 +76,35 @@ export function mightCarryUsage(line: string, provider: UsageProviderKind): bool
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Decides who actually billed a Claude-family record.
+ *
+ * An OpenRouter instance drives the same CLI against OpenRouter's
+ * Anthropic-compatible endpoint, so its turns are written into the Claude
+ * transcript home and are indistinguishable by directory. Two per-record marks
+ * separate them:
+ *
+ * - OpenRouter annotates each response with the upstream that served it
+ *   (`"OpenAI"`, `"Amazon Bedrock"`, `"Moonshot AI"`, …). The Anthropic API
+ *   sends no such field, so its presence is decisive.
+ * - OpenRouter namespaces every model as `vendor/model`. Anthropic's own ids
+ *   are bare slugs, and the Bedrock and Vertex forms (`us.anthropic.…`,
+ *   `claude-…@2025…`) carry no slash either.
+ *
+ * Attribution errs toward `claude`: a genuine Anthropic turn misfiled under
+ * OpenRouter would overstate a bill the user can check against OpenRouter's own
+ * dashboard, while the reverse only understates a split.
+ */
+export function classifyClaudeFamilyProvider(
+  model: string,
+  upstreamProvider: unknown,
+): UsageProviderKind {
+  if (typeof upstreamProvider === "string" && upstreamProvider.trim().length > 0) {
+    return "openrouter";
+  }
+  return model.includes("/") ? "openrouter" : "claude";
+}
+
+/**
  * Parses one line of a Claude Code transcript.
  *
  * T3 Code writes one record per assistant *content block*, and every one of
@@ -119,7 +148,7 @@ export function parseClaudeLine(line: string): UsageRecord | null {
   const cost = record["costUSD"];
 
   return {
-    provider: "claude",
+    provider: classifyClaudeFamilyProvider(model, messageRecord["provider"]),
     timestampMs,
     model,
     sessionId: typeof record["sessionId"] === "string" ? record["sessionId"] : "",
