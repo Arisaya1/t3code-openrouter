@@ -196,7 +196,7 @@ export function UsagePage() {
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {metric === "cost"
-                          ? "* if billed at full API rate"
+                          ? "* estimated AUD at published API rates"
                           : `Input, cache reads and output across ${formatCount(merged.sessions)} sessions.`}
                       </span>
                     </div>

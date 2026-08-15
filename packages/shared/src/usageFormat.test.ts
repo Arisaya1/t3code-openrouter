@@ -6,6 +6,7 @@ import {
   formatDateTimeShort,
   formatHourShort,
   formatRelativeHourShort,
+  formatUsd,
   makeWindow,
 } from "./usageFormat.ts";
 
@@ -45,6 +46,10 @@ describe("hourly usage formatting", () => {
         "America/Los_Angeles",
       ),
     ).toBe("6 PM yesterday");
+  });
+
+  it("formats usage cost as Australian dollars", () => {
+    expect(formatUsd(3.67)).toMatch(/A\$3\.67|AUD\s*3\.67/);
   });
 
   it("builds an exact minute-aligned 24-hour request", () => {

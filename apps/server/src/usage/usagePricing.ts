@@ -99,9 +99,67 @@ const UNPRICEABLE_MODELS = new Set([
 ]);
 
 export function lookupRate(table: RateTable, model: string): ModelRate | null {
-  const normalized = normalizeModelName(model);
-  if (normalized.length === 0 || UNPRICEABLE_MODELS.has(normalized)) return null;
-  return table.get(normalized) ?? null;
+  const trimmed = model.trim().toLowerCase();
+  if (trimmed.length === 0 || UNPRICEABLE_MODELS.has(normalizeModelName(trimmed))) return null;
+  // Prefer the full slug so OpenRouter's `x-ai/grok-4.6` is not collapsed onto
+  // a different vendor's `grok-4.6`. Fall back to the bare name for LiteLLM
+  // entries, which are published both with and without a provider prefix.
+  return table.get(trimmed) ?? table.get(normalizeModelName(trimmed)) ?? null;
+}
+
+function finitePositive(value: unknown): number | null {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  return typeof parsed === "number" && Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * Projects OpenRouter's public catalogue into a rate table.
+ *
+ * OpenRouter quotes USD per token on `pricing.prompt` / `pricing.completion`.
+ * Cache fields are optional; when a model omits them, cached input is priced
+ * as plain input rather than as free.
+ */
+export function parseOpenRouterRateTable(document: unknown): RateTable {
+  const table = new Map<string, ModelRate>();
+  if (typeof document !== "object" || document === null) return table;
+
+  const data = (document as { readonly data?: unknown }).data;
+  if (!Array.isArray(data)) return table;
+
+  for (const raw of data) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const entry = raw as { readonly id?: unknown; readonly pricing?: unknown };
+    if (typeof entry.id !== "string" || entry.id.trim().length === 0) continue;
+    if (typeof entry.pricing !== "object" || entry.pricing === null) continue;
+
+    const pricing = entry.pricing as Record<string, unknown>;
+    const input = finitePositive(pricing["prompt"]);
+    const output = finitePositive(pricing["completion"]);
+    if (input === null || output === null) continue;
+
+    const id = entry.id.trim().toLowerCase();
+    table.set(id, {
+      inputCostPerToken: input,
+      outputCostPerToken: output,
+      cacheReadCostPerToken: finitePositive(pricing["input_cache_read"]) ?? input,
+      cacheCreationCostPerToken: finitePositive(pricing["input_cache_write"]) ?? input,
+    });
+  }
+  return table;
+}
+
+/**
+ * Overlay OpenRouter's published rates on top of the LiteLLM table.
+ *
+ * OpenRouter ids are namespaced (`x-ai/grok-4.6`) and are the ones transcripts
+ * actually record. They win on collision so a Grok turn is priced at what
+ * OpenRouter publishes, not at a same-named LiteLLM row from another vendor.
+ */
+export function mergeRateTables(base: RateTable, overlay: RateTable): RateTable {
+  if (overlay.size === 0) return base;
+  const merged = new Map(base);
+  for (const [model, rate] of overlay) merged.set(model, rate);
+  return merged;
 }
 
 export interface PricedUsage {
@@ -145,4 +203,23 @@ export function cacheSavingsUsd(table: RateTable, model: string, totals: UsageTo
   const rate = lookupRate(table, model);
   if (rate === null) return 0;
   return totals.cachedInputTokens * (rate.inputCostPerToken - rate.cacheReadCostPerToken);
+}
+
+/**
+ * Mid-market USD → AUD multiplier. Anything non-finite or non-positive is
+ * treated as "no conversion" so a bad FX fetch cannot zero the page.
+ */
+export function usdToAud(usd: number, audPerUsd: number): number {
+  if (!Number.isFinite(usd)) return 0;
+  if (!Number.isFinite(audPerUsd) || audPerUsd <= 0) return usd;
+  return usd * audPerUsd;
+}
+
+/** Frankfurter's `/v1/latest?from=USD&to=AUD` body. */
+export function parseUsdAudRate(document: unknown): number | null {
+  if (typeof document !== "object" || document === null) return null;
+  const rates = (document as { readonly rates?: unknown }).rates;
+  if (typeof rates !== "object" || rates === null) return null;
+  const aud = (rates as { readonly AUD?: unknown }).AUD;
+  return typeof aud === "number" && Number.isFinite(aud) && aud > 0 ? aud : null;
 }

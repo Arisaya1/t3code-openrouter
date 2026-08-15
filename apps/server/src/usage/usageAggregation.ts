@@ -15,7 +15,7 @@
 import type { UsageBucket, UsageDay, UsageResolution, UsageTokenTotals } from "@t3tools/contracts";
 
 import { addTotals, EMPTY_TOTALS, type UsageRecord } from "./usageTranscripts.ts";
-import { cacheSavingsUsd, priceUsage, type RateTable } from "./usagePricing.ts";
+import { cacheSavingsUsd, priceUsage, usdToAud, type RateTable } from "./usagePricing.ts";
 
 /**
  * Formats an instant as a `YYYY-MM-DD` day in `timeZone`.
@@ -61,6 +61,8 @@ export interface AggregateOptions {
   readonly sinceDay: string;
   readonly untilDay: string;
   readonly rates: RateTable;
+  /** Mid-market USD → AUD. Defaults to 1 (leave the figure in USD). */
+  readonly audPerUsd?: number;
   readonly resolution?: UsageResolution;
   readonly sinceTimeMs?: number;
   readonly untilTimeMs?: number;
@@ -166,10 +168,14 @@ export class UsageAggregator {
       record.totals,
       record.reportedCostUsd,
     );
+    const audPerUsd = this.#options.audPerUsd ?? 1;
 
     bucket.totals = addTotals(bucket.totals, record.totals);
-    bucket.costUsd += priced.costUsd;
-    bucket.cacheSavingsUsd += cacheSavingsUsd(this.#options.rates, record.model, record.totals);
+    bucket.costUsd += usdToAud(priced.costUsd, audPerUsd);
+    bucket.cacheSavingsUsd += usdToAud(
+      cacheSavingsUsd(this.#options.rates, record.model, record.totals),
+      audPerUsd,
+    );
     bucket.records += 1;
     if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;

@@ -6,15 +6,16 @@
  */
 import { UsageDay, type UsageResolution, type UsageSummaryInput } from "@t3tools/contracts";
 
-const CURRENCY = new Intl.NumberFormat("en-US", {
+const CURRENCY = new Intl.NumberFormat("en-AU", {
   style: "currency",
-  currency: "USD",
+  currency: "AUD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
 const INTEGER = new Intl.NumberFormat("en-US");
 
+/** Formats a usage cost. After conversion the figure is AUD. */
 export function formatUsd(value: number): string {
   return CURRENCY.format(value);
 }

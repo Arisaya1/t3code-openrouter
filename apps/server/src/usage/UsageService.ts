@@ -38,7 +38,13 @@ import * as ServerSettings from "../serverSettings.ts";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
-import { parseRateTable, type RateTable } from "./usagePricing.ts";
+import {
+  mergeRateTables,
+  parseOpenRouterRateTable,
+  parseRateTable,
+  parseUsdAudRate,
+  type RateTable,
+} from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
@@ -55,8 +61,11 @@ import type { UsageRecord } from "./usageTranscripts.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const OPENROUTER_RATES_URL = "https://openrouter.ai/api/v1/models";
+const USD_AUD_RATE_URL = "https://api.frankfurter.dev/v1/latest?from=USD&to=AUD";
+const PRICING_SOURCE = "LiteLLM + OpenRouter catalogue, USD converted to AUD via Frankfurter";
 
-/** Rates move rarely; a day-old table keeps the page working offline. */
+/** Rates and FX move rarely; a day-old snapshot keeps the page working offline. */
 const RATES_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -79,6 +88,17 @@ const decodeRatesCache = Schema.decodeUnknownEffect(
 );
 const encodeRatesCache = Schema.encodeEffect(
   Schema.fromJsonString(RatesCacheFile as unknown as Schema.Codec<typeof RatesCacheFile.Type>),
+);
+
+const FxCacheFile = Schema.Struct({
+  fetchedAtMs: Schema.Number,
+  audPerUsd: Schema.Number,
+});
+const decodeFxCache = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(FxCacheFile as unknown as Schema.Codec<typeof FxCacheFile.Type>),
+);
+const encodeFxCache = Schema.encodeEffect(
+  Schema.fromJsonString(FxCacheFile as unknown as Schema.Codec<typeof FxCacheFile.Type>),
 );
 
 /** The scan cache is narrowed by hand in `usageScanCache`, so JSON is enough here. */
@@ -108,7 +128,7 @@ export const layerTest = Layer.succeed(
         sources: [],
         pricing: {
           status: "unavailable",
-          source: LITELLM_RATES_URL,
+          source: PRICING_SOURCE,
           fetchedAt: null,
           knownModels: 0,
         },
@@ -128,60 +148,139 @@ export const make = Effect.gen(function* () {
   let cacheDirty = false;
 
   const ratesCachePath = path.join(config.stateDir, "usage-model-rates.json");
+  const openRouterRatesCachePath = path.join(config.stateDir, "usage-openrouter-rates.json");
+  const fxCachePath = path.join(config.stateDir, "usage-usd-aud.json");
   const scanCachePath = path.join(config.stateDir, "usage-scan-cache.json");
   let rates: RateTable = new Map();
   let ratesFetchedAtMs: number | null = null;
   let ratesStatus: UsageSummary["pricing"]["status"] = "unavailable";
+  let audPerUsd = 1;
+  let fxFetchedAtMs: number | null = null;
+
+  const fetchJson = (url: string) =>
+    httpClient.get(url).pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) => response.json),
+      Effect.timeout(10_000),
+      Effect.catchCause(() => Effect.succeed(null)),
+    );
+
+  const persistJsonCache = <A>(
+    filePath: string,
+    value: A,
+    encode: (value: A) => Effect.Effect<string, unknown>,
+  ) =>
+    encode(value).pipe(
+      Effect.flatMap((serialized) => fileSystem.writeFileString(filePath, serialized)),
+      Effect.catchCause(() => Effect.void),
+    );
 
   /**
-   * Loads the LiteLLM rate table, preferring a fresh copy and falling back to
-   * the on-disk snapshot. With neither, every model reports as unpriced rather
-   * than the page failing.
+   * Loads LiteLLM + OpenRouter rate tables, preferring a fresh copy and falling
+   * back to the on-disk snapshot. With neither, every model reports as unpriced
+   * rather than the page failing.
    */
   const ensureRates = Effect.fn("UsageService.ensureRates")(function* () {
     const now = yield* Clock.currentTimeMillis;
     if (ratesFetchedAtMs !== null && now - ratesFetchedAtMs < RATES_TTL_MS) return;
 
     if (ratesFetchedAtMs === null) {
-      const fromDisk = yield* fileSystem.readFileString(ratesCachePath).pipe(
+      const liteFromDisk = yield* fileSystem.readFileString(ratesCachePath).pipe(
         Effect.flatMap((raw) => decodeRatesCache(raw)),
         Effect.catchCause(() => Effect.succeed(null)),
       );
-      if (fromDisk !== null) {
-        const parsed = parseRateTable(fromDisk.document);
-        if (parsed.size > 0) {
-          rates = parsed;
-          ratesFetchedAtMs = fromDisk.fetchedAtMs;
-          ratesStatus = "cached";
-          if (now - fromDisk.fetchedAtMs < RATES_TTL_MS) return;
-        }
+      const openRouterFromDisk = yield* fileSystem.readFileString(openRouterRatesCachePath).pipe(
+        Effect.flatMap((raw) => decodeRatesCache(raw)),
+        Effect.catchCause(() => Effect.succeed(null)),
+      );
+      const liteParsed = liteFromDisk === null ? new Map() : parseRateTable(liteFromDisk.document);
+      const openRouterParsed =
+        openRouterFromDisk === null
+          ? new Map()
+          : parseOpenRouterRateTable(openRouterFromDisk.document);
+      const merged = mergeRateTables(liteParsed, openRouterParsed);
+      if (merged.size > 0) {
+        rates = merged;
+        const newest = Math.max(
+          liteFromDisk?.fetchedAtMs ?? 0,
+          openRouterFromDisk?.fetchedAtMs ?? 0,
+        );
+        ratesFetchedAtMs = newest === 0 ? null : newest;
+        ratesStatus = "cached";
+        if (ratesFetchedAtMs !== null && now - ratesFetchedAtMs < RATES_TTL_MS) return;
       }
     }
 
-    const fetched = yield* httpClient.get(LITELLM_RATES_URL).pipe(
-      Effect.flatMap(HttpClientResponse.filterStatusOk),
-      Effect.flatMap((response) => response.json),
-      Effect.timeout(10_000),
-      Effect.catchCause(() => Effect.succeed(null)),
+    const [liteFetched, openRouterFetched] = yield* Effect.all(
+      [fetchJson(LITELLM_RATES_URL), fetchJson(OPENROUTER_RATES_URL)],
+      { concurrency: 2 },
     );
-    if (fetched === null) {
-      // The refresh failed; whatever we are serving is now past its TTL and
-      // must not keep claiming to be fresh.
+
+    const liteParsed = liteFetched === null ? new Map() : parseRateTable(liteFetched);
+    const openRouterParsed =
+      openRouterFetched === null ? new Map() : parseOpenRouterRateTable(openRouterFetched);
+    const merged = mergeRateTables(
+      liteParsed.size > 0 ? liteParsed : rates,
+      openRouterParsed.size > 0 ? openRouterParsed : new Map(),
+    );
+
+    if (merged.size === 0) {
       if (rates.size > 0) ratesStatus = "cached";
       return;
     }
 
-    const parsed = parseRateTable(fetched);
-    if (parsed.size === 0) return;
+    rates = merged;
+    const refreshed = liteFetched !== null || openRouterFetched !== null;
+    if (refreshed) {
+      ratesFetchedAtMs = now;
+      ratesStatus = "fresh";
+    } else if (rates.size > 0) {
+      ratesStatus = "cached";
+    }
 
-    rates = parsed;
-    ratesFetchedAtMs = now;
-    ratesStatus = "fresh";
+    if (liteFetched !== null && liteParsed.size > 0) {
+      yield* persistJsonCache(
+        ratesCachePath,
+        { fetchedAtMs: now, document: liteFetched },
+        encodeRatesCache,
+      );
+    }
+    if (openRouterFetched !== null && openRouterParsed.size > 0) {
+      yield* persistJsonCache(
+        openRouterRatesCachePath,
+        { fetchedAtMs: now, document: openRouterFetched },
+        encodeRatesCache,
+      );
+    }
+  });
 
-    yield* encodeRatesCache({ fetchedAtMs: now, document: fetched }).pipe(
-      Effect.flatMap((serialized) => fileSystem.writeFileString(ratesCachePath, serialized)),
-      Effect.catchCause(() => Effect.void),
-    );
+  /**
+   * Loads a mid-market USD → AUD rate. A failed fetch keeps the last good
+   * snapshot; with none, costs stay in USD rather than the page failing.
+   */
+  const ensureFx = Effect.fn("UsageService.ensureFx")(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    if (fxFetchedAtMs !== null && now - fxFetchedAtMs < RATES_TTL_MS) return;
+
+    if (fxFetchedAtMs === null) {
+      const fromDisk = yield* fileSystem.readFileString(fxCachePath).pipe(
+        Effect.flatMap((raw) => decodeFxCache(raw)),
+        Effect.catchCause(() => Effect.succeed(null)),
+      );
+      if (fromDisk !== null && fromDisk.audPerUsd > 0) {
+        audPerUsd = fromDisk.audPerUsd;
+        fxFetchedAtMs = fromDisk.fetchedAtMs;
+        if (now - fromDisk.fetchedAtMs < RATES_TTL_MS) return;
+      }
+    }
+
+    const fetched = yield* fetchJson(USD_AUD_RATE_URL);
+    const parsed = parseUsdAudRate(fetched);
+    if (parsed === null) return;
+
+    audPerUsd = parsed;
+    fxFetchedAtMs = now;
+    yield* persistJsonCache(fxCachePath, { fetchedAtMs: now, audPerUsd: parsed }, encodeFxCache);
   });
 
   /**
@@ -324,6 +423,7 @@ export const make = Effect.gen(function* () {
 
     const startedAtMs = yield* Clock.currentTimeMillis;
     yield* ensureRates();
+    yield* ensureFx();
     yield* ensureScanCacheLoaded;
 
     const hostId = NodeOS.hostname();
@@ -347,6 +447,7 @@ export const make = Effect.gen(function* () {
       resolution: input.resolution ?? "day",
       ...hourlyWindow,
       rates,
+      audPerUsd,
     });
 
     const sources: UsageSource[] = [];
@@ -431,7 +532,7 @@ export const make = Effect.gen(function* () {
       sources,
       pricing: {
         status: ratesStatus,
-        source: LITELLM_RATES_URL,
+        source: PRICING_SOURCE,
         fetchedAt:
           ratesFetchedAtMs === null
             ? null
