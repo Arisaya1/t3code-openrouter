@@ -274,6 +274,24 @@ export interface ClaudeAdapterLiveOptions {
    */
   readonly driverKind?: ProviderDriverKind;
   readonly environment?: NodeJS.ProcessEnv;
+  /**
+   * Real context window for a model slug, in tokens, or undefined when the
+   * driver has no published figure for it.
+   *
+   * Only `OpenRouterDriver` supplies this, reading OpenRouter's per-model
+   * `context_length` out of its cached catalogue. Claude Code only ships
+   * knowledge of Anthropic's own bare slugs, so a gateway slug
+   * (`moonshotai/kimi-k3`) makes it warn and assume a 200k window — and
+   * auto-compact there no matter how large the model really is. The resolved
+   * value becomes `CLAUDE_CODE_MAX_CONTEXT_TOKENS` on the spawned CLI.
+   *
+   * The model is per-thread and this env var is per-process, so it is read once
+   * per session, at spawn. Switching models mid-thread re-points the runtime
+   * (`query.setModel`) but cannot move the compact threshold; a new thread does.
+   */
+  readonly resolveModelContextWindow?: (
+    model: string,
+  ) => Effect.Effect<number | undefined, never, never>;
   readonly createQuery?: (input: {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
@@ -1654,6 +1672,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
   );
+  const resolveModelContextWindow = options?.resolveModelContextWindow;
+  // A window the user set themselves — on the instance or machine-wide — is the
+  // one they meant, so the catalogue never overwrites it. Blank counts as
+  // unset: Claude Code reads an empty value as a malformed number and falls
+  // back to its assumption, which is exactly what we are here to replace.
+  const hasConfiguredMaxContextTokens =
+    (claudeEnvironment.CLAUDE_CODE_MAX_CONTEXT_TOKENS?.trim().length ?? 0) > 0;
   const claudeSdkExecutablePath = yield* resolveClaudeSdkExecutablePath(
     claudeSettings.binaryPath,
     claudeEnvironment,
@@ -4085,7 +4110,30 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const caps = getClaudeModelCapabilities(modelSelection?.model);
       const descriptors = getProviderOptionDescriptors({ caps });
       const apiModelId = modelSelection ? resolveClaudeApiModelId(modelSelection) : undefined;
-      const initialContextWindow = selectedClaudeContextWindow(modelSelection);
+      // Anthropic's own slugs carry their window as a user-selectable option,
+      // and that answer wins: it is what the `[1m]` suffix on `apiModelId`
+      // actually requested of the API, and the CLI already knows these models.
+      const nativeContextWindow = selectedClaudeContextWindow(modelSelection);
+      // Otherwise fall to the window the driver's catalogue publishes for this
+      // thread's model, if it has one.
+      const publishedContextWindow =
+        modelSelection?.model && resolveModelContextWindow
+          ? yield* resolveModelContextWindow(modelSelection.model)
+          : undefined;
+      const initialContextWindow = nativeContextWindow ?? publishedContextWindow;
+      // Tell the CLI the real window rather than letting it fall back to an
+      // assumed 200k on a slug it does not recognize. Applied to the spawn
+      // environment only — `claudeEnvironment` is shared by every session on
+      // this instance and must keep describing the instance, not one thread.
+      const sessionEnvironment =
+        nativeContextWindow === undefined &&
+        publishedContextWindow !== undefined &&
+        !hasConfiguredMaxContextTokens
+          ? {
+              ...claudeEnvironment,
+              CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(publishedContextWindow),
+            }
+          : claudeEnvironment;
       const rawEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
       const effort = resolveClaudeEffort(caps, rawEffort) ?? null;
       const fastModeSupported = descriptors.some(
@@ -4144,7 +4192,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
-        env: claudeEnvironment,
+        env: sessionEnvironment,
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession
@@ -4174,6 +4222,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.resume.turn_count": resumeState?.turnCount ?? -1,
         "claude.query.cwd": input.cwd ?? "",
         "claude.query.model": apiModelId ?? "",
+        "claude.query.max_context_tokens": sessionEnvironment.CLAUDE_CODE_MAX_CONTEXT_TOKENS ?? "",
         "claude.query.effort": effectiveEffort ?? "",
         "claude.query.permission_mode": permissionMode ?? "",
         "claude.query.allow_dangerously_skip_permissions": permissionMode === "bypassPermissions",

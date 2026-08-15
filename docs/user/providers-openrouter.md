@@ -111,30 +111,50 @@ requests from your API key.
 
 ## Context Windows On Non-Anthropic Models
 
-Claude Code only knows the context window of models it ships knowledge of. Pick, say,
-`moonshotai/kimi-k3` and it says so on the first turn:
+Claude Code only knows the context window of models it ships knowledge of, and a namespaced
+gateway slug is not one of them. Left alone it says so on the first turn and assumes 200k:
 
 ```text
 "moonshotai/kimi-k3" is not a model this version of Claude Code recognizes, so
 auto-compact will keep this session within 200k tokens (the context window it assumes).
 ```
 
-The session works — this is a warning, not an error — but auto-compact will compact at 200k
-even on a model with a much larger window. To use the real window, set it on the instance:
+**T3 Code sets the real window for you, so you should not see this.** OpenRouter publishes a
+`context_length` per model, T3 Code already fetches that catalogue for the model picker, and
+when a thread starts it passes the selected model's figure to the spawned CLI as
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS`. Auto-compact then triggers at the model's actual limit, and
+the context meter in the composer reads against the same number.
 
-```text
-CLAUDE_CODE_MAX_CONTEXT_TOKENS  262144
-```
-
-Each model's true `context_length` is in the catalogue:
+You can see what a model reports:
 
 ```bash
 curl -s https://openrouter.ai/api/v1/models | jq -r '.data[] | "\(.id)\t\(.context_length)"'
 ```
 
-Because that variable is per-instance and the model is per-thread, an instance whose threads
-span models with different windows should be set to the smallest of them, or split into one
-instance per model. Anthropic slugs need none of this — they are recognized.
+Three cases still fall back to Claude Code's 200k assumption, and the warning above is the
+signal that you are in one of them:
+
+- **The catalogue has no figure for that model** — a custom model you added by hand that
+  OpenRouter does not list, or an entry OpenRouter publishes without a `context_length`.
+- **The catalogue could not be fetched** when the instance last checked (offline, OpenRouter
+  down). The built-in fallback model list carries no windows, deliberately: a remembered
+  number that has since changed would compact your sessions at the wrong point, which is
+  worse than a conservative assumption.
+- **You set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` yourself.** An explicit value always wins — it
+  is how you cap context below what the model allows, to control cost or latency.
+
+Setting it by hand is otherwise no longer necessary:
+
+```text
+CLAUDE_CODE_MAX_CONTEXT_TOKENS  262144
+```
+
+One limit remains, and it comes from the CLI rather than from T3 Code: the variable is read
+once, when the session's process starts. Switching a thread's model mid-conversation
+re-points the runtime at the new model but leaves the compact threshold where it was. Start
+a new thread when you switch to a model with a materially different window. Anthropic's own
+bare slugs (on a Claude provider rather than this one) need none of this — the CLI
+recognizes them, and their `Context window` setting is offered in the model picker instead.
 
 ## Notes
 

@@ -20,11 +20,15 @@ import type { UsageRecord } from "./usageTranscripts.ts";
 
 // v2: Codex fork-copy suppression changed what a file parses to, so v1
 // entries would keep serving double-counted records forever.
-export const USAGE_SCAN_CACHE_VERSION = 2 as const;
+// v3: OpenRouter records live in the Claude transcript home and are now
+// attributed per record, which v2 rows cannot express. Reusing them would keep
+// reporting OpenRouter spend as Claude Code until every file changed.
+export const USAGE_SCAN_CACHE_VERSION = 3 as const;
 
 export interface CachedFile {
   readonly size: number;
   readonly mtimeMs: number;
+  /** The parser this file was read with, i.e. which transcript home it sits in. */
   readonly provider: UsageProviderKind;
   readonly records: readonly UsageRecord[];
 }
@@ -47,6 +51,12 @@ type SerializedRecord = readonly [
   reasoningTokens: number,
   dedupeKey: string | null,
   reportedCostUsd: number | null,
+  /**
+   * 1 when the record was billed by OpenRouter rather than by the file's own
+   * provider. A flag rather than the provider name because it is false on the
+   * overwhelming majority of rows, and this file is written on every scan.
+   */
+  billedByOpenRouter: 0 | 1,
 ];
 
 interface SerializedFile {
@@ -96,6 +106,7 @@ export function encodeScanCache(cache: ScanCache): SerializedCache {
         record.totals.reasoningTokens,
         record.dedupeKey,
         record.reportedCostUsd,
+        record.provider === "openrouter" ? 1 : 0,
       ]),
     };
   }
@@ -134,6 +145,8 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof raw !== "object" || raw === null) continue;
     const entry = raw as Partial<SerializedFile>;
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
+    // Only the two transcript homes are parsers; `openrouter` is a per-record
+    // attribution within the Claude one and never names a file.
     if (entry.p !== "claude" && entry.p !== "codex") continue;
     if (!isRecordArray(entry.r)) continue;
 
@@ -144,7 +157,7 @@ export function decodeScanCache(document: unknown): ScanCache {
     // file would never be re-parsed, silently losing the dropped rows' usage.
     let corrupt = false;
     for (const row of entry.r) {
-      if (!isRecordArray(row) || row.length < 10) {
+      if (!isRecordArray(row) || row.length < 11) {
         corrupt = true;
         break;
       }
@@ -159,6 +172,7 @@ export function decodeScanCache(document: unknown): ScanCache {
         reasoning,
         dedupeKey,
         reportedCostUsd,
+        billedByOpenRouter,
       ] = row as SerializedRecord;
 
       const model = typeof modelIndex === "number" ? models[modelIndex] : undefined;
@@ -177,7 +191,7 @@ export function decodeScanCache(document: unknown): ScanCache {
       }
 
       records.push({
-        provider,
+        provider: billedByOpenRouter === 1 ? "openrouter" : provider,
         timestampMs,
         model,
         sessionId: (typeof sessionIndex === "number" ? sessions[sessionIndex] : undefined) ?? "",

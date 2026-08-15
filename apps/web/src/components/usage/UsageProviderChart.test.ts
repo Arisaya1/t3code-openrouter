@@ -84,6 +84,7 @@ describe("buildDayColumns", () => {
 
     expect(first?.bands).toEqual([
       { provider: "codex", value: 10 },
+      { provider: "openrouter", value: 0 },
       { provider: "claude", value: 20 },
     ]);
   });

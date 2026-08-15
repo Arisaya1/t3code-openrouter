@@ -21,9 +21,19 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
  */
-export const USAGE_CONTRACT_VERSION = 4 as const;
+export const USAGE_CONTRACT_VERSION = 5 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex"]);
+/**
+ * Who a bucket's tokens were actually billed by.
+ *
+ * `openrouter` is not a separate transcript directory: an OpenRouter instance
+ * runs the Claude Code CLI against OpenRouter's Anthropic-compatible endpoint,
+ * so its turns are written into the Claude transcript home alongside genuine
+ * Anthropic ones and are told apart per record. {@link UsageSourceFingerprint}
+ * therefore only ever carries `claude` or `codex` - it identifies a directory,
+ * not a biller.
+ */
+export const UsageProviderKind = Schema.Literals(["claude", "codex", "openrouter"]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
