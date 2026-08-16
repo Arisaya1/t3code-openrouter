@@ -1689,6 +1689,37 @@ const make = Effect.gen(function* () {
         }
       }
 
+      const reasoningDelta =
+        event.type === "content.delta" && event.payload.streamKind === "reasoning_text"
+          ? event.payload.delta
+          : undefined;
+
+      if (reasoningDelta && reasoningDelta.length > 0) {
+        // Reasoning/thinking text is streamed to the same assistant message the
+        // turn's text uses (getOrCreateAssistantMessageId starts the segment if
+        // reasoning arrives first). It is delivered live — it is display-only
+        // and usually precedes any buffered text, so it should reach the client
+        // immediately. turn.completed finalizes these messages exactly like text.
+        const reasoningTurnId = toTurnId(event.turnId);
+        const reasoningMessageId = yield* getOrCreateAssistantMessageId({
+          threadId: thread.id,
+          event,
+          ...(reasoningTurnId ? { turnId: reasoningTurnId } : {}),
+        });
+        if (reasoningTurnId) {
+          yield* rememberAssistantMessageId(thread.id, reasoningTurnId, reasoningMessageId);
+        }
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.assistant.reasoning.delta",
+          commandId: yield* providerCommandId(event, "assistant-reasoning-delta"),
+          threadId: thread.id,
+          messageId: reasoningMessageId,
+          delta: reasoningDelta,
+          ...(reasoningTurnId ? { turnId: reasoningTurnId } : {}),
+          createdAt: now,
+        });
+      }
+
       const pauseForUserTurnId =
         event.type === "request.opened" || event.type === "user-input.requested"
           ? toTurnId(event.turnId)

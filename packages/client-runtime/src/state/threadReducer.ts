@@ -282,10 +282,12 @@ export function applyThreadDetailEvent(
 
     // ── Messages ────────────────────────────────────────────────────
     case "thread.message-sent": {
+      const reasoningDelta = event.payload.reasoningDelta;
       const message: OrchestrationMessage = {
         id: event.payload.messageId,
         role: event.payload.role,
         text: event.payload.text,
+        ...(reasoningDelta !== undefined ? { reasoningText: reasoningDelta } : {}),
         ...(event.payload.attachments !== undefined
           ? { attachments: event.payload.attachments }
           : {}),
@@ -307,6 +309,14 @@ export function applyThreadDetailEvent(
                     : message.text.length > 0
                       ? message.text
                       : entry.text,
+                  reasoningText:
+                    reasoningDelta !== undefined
+                      ? message.streaming
+                        ? `${entry.reasoningText ?? ""}${reasoningDelta}`
+                        : reasoningDelta.length > 0
+                          ? reasoningDelta
+                          : entry.reasoningText
+                      : entry.reasoningText,
                   streaming: message.streaming,
                   ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
                   ...(message.streaming ? {} : { updatedAt: message.updatedAt }),

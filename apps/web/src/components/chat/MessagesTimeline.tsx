@@ -1107,13 +1107,60 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
   );
 }
 
+/**
+ * Collapsible model "Thinking" block rendered above the assistant message text
+ * when the provider streamed reasoning (OpenRouter gateway models, Claude
+ * thinking, Codex reasoning). Collapsed by default showing the first line;
+ * expands in place to the full reasoning text. Mirrors TurnTimelineRow's
+ * chevron + expand pattern.
+ */
+function ReasoningTimelineBlock({ reasoning }: { reasoning: string | undefined }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!reasoning || reasoning.length === 0) {
+    return null;
+  }
+  const firstLine = reasoning.split("\n")[0]?.trim() ?? "";
+  const preview = firstLine.length > 0 ? firstLine : reasoning.slice(0, 120);
+  const Chevron = expanded ? ChevronDownIcon : ChevronRightIcon;
+  return (
+    <div className="mb-1.5">
+      <button
+        type="button"
+        className="flex w-full min-w-0 cursor-pointer items-start gap-2 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <Chevron className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/65" />
+        <span className="shrink-0 font-medium text-muted-foreground">Thinking</span>
+        {!expanded && preview.length > 0 ? (
+          <span className="min-w-0 flex-1 truncate text-muted-foreground/70">{preview}</span>
+        ) : null}
+      </button>
+      {expanded ? (
+        <div className="mt-1 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-[13px] leading-6 text-muted-foreground whitespace-pre-wrap">
+          {reasoning}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  // A reasoning-only message (thinking followed straight into a tool call) has
+  // no assistant text; don't label it "(empty response)" — its Thinking block
+  // is the content.
+  const hasReasoningText = (row.message.reasoningText ?? "").length > 0;
+  const messageText =
+    row.message.text ||
+    (row.message.streaming || hasReasoningText
+      ? ""
+      : "(empty response)");
 
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
+        <ReasoningTimelineBlock reasoning={row.message.reasoningText} />
         <ChatMarkdown
           text={messageText}
           cwd={ctx.markdownCwd}

@@ -1952,6 +1952,76 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("streams reasoning_text into an assistant message and finalizes it on turn end", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-reasoning"),
+      provider: ProviderDriverKind.make("openrouter"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-reasoning",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-a"),
+      provider: ProviderDriverKind.make("openrouter"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      payload: { streamKind: "reasoning_text", delta: "Thought one. " },
+    });
+
+    const midThread = await waitForThread(harness.readModel, (thread) =>
+      thread.messages.some(
+        (message: ProviderRuntimeTestMessage) => message.reasoningText === "Thought one. ",
+      ),
+    );
+    const mid = midThread.messages.find(
+      (message: ProviderRuntimeTestMessage) => message.reasoningText === "Thought one. ",
+    );
+    expect(mid?.streaming).toBe(true);
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-b"),
+      provider: ProviderDriverKind.make("openrouter"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      payload: { streamKind: "reasoning_text", delta: "Thought two." },
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-reasoning"),
+      provider: ProviderDriverKind.make("openrouter"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      payload: { state: "completed" },
+    });
+
+    const doneThread = await waitForThread(harness.readModel, (thread) =>
+      thread.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.reasoningText === "Thought one. Thought two." && !message.streaming,
+      ),
+    );
+    const done = doneThread.messages.find(
+      (message: ProviderRuntimeTestMessage) => message.reasoningText === "Thought one. Thought two.",
+    );
+    expect(done?.streaming).toBe(false);
+  });
+
   it("flushes and completes buffered assistant text when an approval request opens", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

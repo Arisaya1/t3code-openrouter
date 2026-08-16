@@ -299,6 +299,43 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("1 changed file");
   });
 
+  it("renders a Thinking block for a reasoning-only assistant message", () => {
+    const assistantMessageId = MessageId.make("message-reasoning-only");
+    const turnId = TurnId.make("turn-reasoning-only");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        latestTurn={{
+          turnId,
+          state: "completed",
+          startedAt: MESSAGE_CREATED_AT,
+          completedAt: MESSAGE_CREATED_AT,
+        }}
+        timelineEntries={[
+          {
+            id: "entry-reasoning-only",
+            kind: "message",
+            createdAt: MESSAGE_CREATED_AT,
+            message: {
+              id: assistantMessageId,
+              role: "assistant",
+              text: "",
+              reasoningText: "Let me reason about this before acting.",
+              turnId,
+              createdAt: MESSAGE_CREATED_AT,
+              updatedAt: MESSAGE_CREATED_AT,
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Thinking");
+    // A reasoning-only message must not be flagged as an empty response.
+    expect(markup).not.toContain("(empty response)");
+  });
+
   it("treats only the strict list end as the live edge", async () => {
     const {
       resolveTimelineIsAtEnd,

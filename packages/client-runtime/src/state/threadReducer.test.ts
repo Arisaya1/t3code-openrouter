@@ -377,6 +377,105 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
+    it("streams reasoningDelta into a new assistant message", () => {
+      const result = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 8,
+        occurredAt: "2026-04-01T06:00:01.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-reasoning"),
+          role: "assistant",
+          text: "",
+          reasoningDelta: "First thought",
+          turnId: TurnId.make("turn-1"),
+          streaming: true,
+          createdAt: "2026-04-01T06:00:01.000Z",
+          updatedAt: "2026-04-01T06:00:01.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages).toHaveLength(1);
+        expect(result.thread.messages[0]?.reasoningText).toBe("First thought");
+        expect(result.thread.messages[0]?.text).toBe("");
+      }
+    });
+
+    it("appends reasoningDelta to an existing message and keeps it on finalize", () => {
+      const threadWithReasoning: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: MessageId.make("msg-r"),
+            role: "assistant",
+            text: "",
+            reasoningText: "Thought one. ",
+            turnId: TurnId.make("turn-1"),
+            streaming: true,
+            createdAt: "2026-04-01T06:00:00.000Z",
+            updatedAt: "2026-04-01T06:00:00.000Z",
+          },
+        ],
+      };
+
+      const streamed = applyThreadDetailEvent(threadWithReasoning, {
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T06:00:01.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-r"),
+          role: "assistant",
+          text: "",
+          reasoningDelta: "Thought two.",
+          turnId: TurnId.make("turn-1"),
+          streaming: true,
+          createdAt: "2026-04-01T06:00:01.000Z",
+          updatedAt: "2026-04-01T06:00:01.000Z",
+        },
+      });
+
+      expect(streamed.kind).toBe("updated");
+      const mid = streamed.kind === "updated" ? streamed.thread.messages[0] : undefined;
+      expect(mid?.reasoningText).toBe("Thought one. Thought two.");
+      expect(mid?.streaming).toBe(true);
+
+      const finalized = applyThreadDetailEvent(
+        { ...baseThread, messages: threadWithReasoning.messages },
+        {
+          ...baseEventFields,
+          sequence: 10,
+          occurredAt: "2026-04-01T06:00:02.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.message-sent",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            messageId: MessageId.make("msg-r"),
+            role: "assistant",
+            text: "",
+            turnId: TurnId.make("turn-1"),
+            streaming: false,
+            createdAt: "2026-04-01T06:00:02.000Z",
+            updatedAt: "2026-04-01T06:00:02.000Z",
+          },
+        },
+      );
+
+      expect(finalized.kind).toBe("updated");
+      const done = finalized.kind === "updated" ? finalized.thread.messages[0] : undefined;
+      expect(done?.reasoningText).toBe("Thought one. ");
+      expect(done?.streaming).toBe(false);
+    });
+
     it("updates latestTurn for assistant messages with a turn", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
