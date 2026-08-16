@@ -153,6 +153,10 @@ export const make = Effect.gen(function* () {
   const scanCachePath = path.join(config.stateDir, "usage-scan-cache.json");
   let rates: RateTable = new Map();
   let ratesFetchedAtMs: number | null = null;
+  // Tracked per source: a fresh LiteLLM disk cache must not mask a missing or
+  // stale OpenRouter one (or vice versa) into skipping the network refresh.
+  let liteRatesFetchedAtMs: number | null = null;
+  let openRouterRatesFetchedAtMs: number | null = null;
   let ratesStatus: UsageSummary["pricing"]["status"] = "unavailable";
   let audPerUsd = 1;
   let fxFetchedAtMs: number | null = null;
@@ -182,7 +186,12 @@ export const make = Effect.gen(function* () {
    */
   const ensureRates = Effect.fn("UsageService.ensureRates")(function* () {
     const now = yield* Clock.currentTimeMillis;
-    if (ratesFetchedAtMs !== null && now - ratesFetchedAtMs < RATES_TTL_MS) return;
+    const bothFresh =
+      liteRatesFetchedAtMs !== null &&
+      now - liteRatesFetchedAtMs < RATES_TTL_MS &&
+      openRouterRatesFetchedAtMs !== null &&
+      now - openRouterRatesFetchedAtMs < RATES_TTL_MS;
+    if (bothFresh) return;
 
     if (ratesFetchedAtMs === null) {
       const liteFromDisk = yield* fileSystem.readFileString(ratesCachePath).pipe(
@@ -201,13 +210,17 @@ export const make = Effect.gen(function* () {
       const merged = mergeRateTables(liteParsed, openRouterParsed);
       if (merged.size > 0) {
         rates = merged;
-        const newest = Math.max(
-          liteFromDisk?.fetchedAtMs ?? 0,
-          openRouterFromDisk?.fetchedAtMs ?? 0,
-        );
+        liteRatesFetchedAtMs = liteFromDisk?.fetchedAtMs ?? null;
+        openRouterRatesFetchedAtMs = openRouterFromDisk?.fetchedAtMs ?? null;
+        const newest = Math.max(liteRatesFetchedAtMs ?? 0, openRouterRatesFetchedAtMs ?? 0);
         ratesFetchedAtMs = newest === 0 ? null : newest;
         ratesStatus = "cached";
-        if (ratesFetchedAtMs !== null && now - ratesFetchedAtMs < RATES_TTL_MS) return;
+        const diskBothFresh =
+          liteRatesFetchedAtMs !== null &&
+          now - liteRatesFetchedAtMs < RATES_TTL_MS &&
+          openRouterRatesFetchedAtMs !== null &&
+          now - openRouterRatesFetchedAtMs < RATES_TTL_MS;
+        if (diskBothFresh) return;
       }
     }
 
@@ -231,6 +244,8 @@ export const make = Effect.gen(function* () {
 
     rates = merged;
     const refreshed = liteFetched !== null || openRouterFetched !== null;
+    if (liteFetched !== null && liteParsed.size > 0) liteRatesFetchedAtMs = now;
+    if (openRouterFetched !== null && openRouterParsed.size > 0) openRouterRatesFetchedAtMs = now;
     if (refreshed) {
       ratesFetchedAtMs = now;
       ratesStatus = "fresh";
@@ -422,8 +437,9 @@ export const make = Effect.gen(function* () {
     }
 
     const startedAtMs = yield* Clock.currentTimeMillis;
-    yield* ensureRates();
-    yield* ensureFx();
+    // Independent third-party endpoints with independent timeouts: run
+    // concurrently rather than paying two serial 10s worst cases.
+    yield* Effect.all([ensureRates(), ensureFx()], { concurrency: 2 });
     yield* ensureScanCacheLoaded;
 
     const hostId = NodeOS.hostname();
