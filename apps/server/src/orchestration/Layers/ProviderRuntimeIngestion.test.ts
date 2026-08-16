@@ -1979,6 +1979,7 @@ describe("ProviderRuntimeIngestion", () => {
       turnId: asTurnId("turn-reasoning"),
       payload: { streamKind: "reasoning_text", delta: "Thought one. " },
     });
+    await harness.drain();
 
     const midThread = await waitForThread(harness.readModel, (thread) =>
       thread.messages.some(
@@ -2009,6 +2010,7 @@ describe("ProviderRuntimeIngestion", () => {
       turnId: asTurnId("turn-reasoning"),
       payload: { state: "completed" },
     });
+    await harness.drain();
 
     const doneThread = await waitForThread(harness.readModel, (thread) =>
       thread.messages.some(
@@ -2017,7 +2019,8 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     );
     const done = doneThread.messages.find(
-      (message: ProviderRuntimeTestMessage) => message.reasoningText === "Thought one. Thought two.",
+      (message: ProviderRuntimeTestMessage) =>
+        message.reasoningText === "Thought one. Thought two.",
     );
     expect(done?.streaming).toBe(false);
   });

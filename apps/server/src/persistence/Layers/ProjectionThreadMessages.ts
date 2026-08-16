@@ -20,6 +20,7 @@ import {
 const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
+    reasoningText: Schema.NullOr(Schema.String),
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
   }),
 );
@@ -36,6 +37,7 @@ function toProjectionThreadMessage(
     isStreaming: row.isStreaming === 1,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    ...(row.reasoningText !== null ? { reasoningText: row.reasoningText } : {}),
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
   };
 }
@@ -48,6 +50,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     execute: (row) => {
       const nextAttachmentsJson =
         row.attachments !== undefined ? JSON.stringify(row.attachments) : null;
+      const nextReasoningText = row.reasoningText ?? null;
       return sql`
         INSERT INTO projection_thread_messages (
           message_id,
@@ -55,6 +58,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id,
           role,
           text,
+          reasoning_text,
           attachments_json,
           is_streaming,
           created_at,
@@ -66,6 +70,14 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           ${row.turnId},
           ${row.role},
           ${row.text},
+          COALESCE(
+            ${nextReasoningText},
+            (
+              SELECT reasoning_text
+              FROM projection_thread_messages
+              WHERE message_id = ${row.messageId}
+            )
+          ),
           COALESCE(
             ${nextAttachmentsJson},
             (
@@ -84,6 +96,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id = excluded.turn_id,
           role = excluded.role,
           text = excluded.text,
+          reasoning_text = COALESCE(
+            excluded.reasoning_text,
+            projection_thread_messages.reasoning_text
+          ),
           attachments_json = COALESCE(
             excluded.attachments_json,
             projection_thread_messages.attachments_json
@@ -106,6 +122,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id AS "turnId",
           role,
           text,
+          reasoning_text AS "reasoningText",
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
@@ -127,6 +144,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id AS "turnId",
           role,
           text,
+          reasoning_text AS "reasoningText",
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",

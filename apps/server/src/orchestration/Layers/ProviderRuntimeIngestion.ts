@@ -1690,7 +1690,9 @@ const make = Effect.gen(function* () {
       }
 
       const reasoningDelta =
-        event.type === "content.delta" && event.payload.streamKind === "reasoning_text"
+        event.type === "content.delta" &&
+        (event.payload.streamKind === "reasoning_text" ||
+          event.payload.streamKind === "reasoning_summary_text")
           ? event.payload.delta
           : undefined;
 
