@@ -6,15 +6,21 @@
  */
 import { UsageDay, type UsageResolution, type UsageSummaryInput } from "@t3tools/contracts";
 
+// Formatted in en-US on purpose. In en-AU the AUD symbol is the bare "$",
+// which renders identically to the USD figure this page used to show — the
+// reader cannot tell converted from unconverted. en-US renders AUD with its
+// disambiguating "A$" marker, which is the whole point of the conversion.
+// Grouping and decimal separators are the same in both locales.
 const CURRENCY = new Intl.NumberFormat("en-US", {
   style: "currency",
-  currency: "USD",
+  currency: "AUD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
 const INTEGER = new Intl.NumberFormat("en-US");
 
+/** Formats a usage cost. After conversion the figure is AUD. */
 export function formatUsd(value: number): string {
   return CURRENCY.format(value);
 }

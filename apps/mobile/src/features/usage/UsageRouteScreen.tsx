@@ -211,7 +211,7 @@ function ChartCard(props: {
           </Text>
           <Text className="text-sm text-foreground-muted">
             {metric === "cost"
-              ? "* if billed at full API rate"
+              ? "* estimated AUD at published API rates"
               : `Across ${formatCount(merged.sessions)} sessions`}
           </Text>
         </View>

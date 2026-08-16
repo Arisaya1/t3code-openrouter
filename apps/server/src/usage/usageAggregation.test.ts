@@ -201,4 +201,19 @@ describe("UsageAggregator", () => {
 
     expect(result.buckets).toHaveLength(3);
   });
+
+  it("converts priced USD into AUD with the supplied FX rate", () => {
+    const aggregator = new UsageAggregator({
+      timeZone: "UTC",
+      sinceDay: "2026-08-01",
+      untilDay: "2026-08-31",
+      rates,
+      audPerUsd: 1.5,
+    });
+    aggregator.add(record());
+    const result = aggregator.finish();
+
+    expect(result.buckets[0]?.costUsd).toBeCloseTo(0.0069375, 9);
+    expect(result.buckets[0]?.cacheSavingsUsd).toBeCloseTo(0.0135, 9);
+  });
 });
