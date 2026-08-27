@@ -268,6 +268,11 @@ export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
+  // Model reasoning/thinking text streamed before or alongside the assistant
+  // text (OpenRouter gateway models, Claude thinking, Codex reasoning). Rendered
+  // as a collapsible "Thinking" block; display-only, never round-tripped to the
+  // provider. Absent when a message carried no reasoning.
+  reasoningText: Schema.optional(Schema.String),
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
@@ -1012,6 +1017,16 @@ const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadMessageAssistantReasoningDeltaCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.assistant.reasoning.delta"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  delta: Schema.String,
+  turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
 const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   type: Schema.Literal("thread.message.assistant.complete"),
   commandId: CommandId,
@@ -1070,6 +1085,7 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
+  ThreadMessageAssistantReasoningDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
@@ -1268,6 +1284,10 @@ export const ThreadMessageSentPayload = Schema.Struct({
   messageId: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
+  // Reasoning delta carried on this streaming chunk. Only set on deltas that
+  // stream reasoning text for the message (OpenRouter/Claude/Codex thinking);
+  // assistant text chunks set `text` instead. Folded into `OrchestrationMessage.reasoningText`.
+  reasoningDelta: Schema.optional(Schema.String),
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,

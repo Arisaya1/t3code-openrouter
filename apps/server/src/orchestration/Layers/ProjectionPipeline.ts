@@ -1004,6 +1004,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               return event.payload.text;
             },
           });
+          const reasoningDelta = event.payload.reasoningDelta;
+          const nextReasoningText =
+            reasoningDelta === undefined
+              ? previousMessage?.reasoningText
+              : event.payload.streaming
+                ? `${previousMessage?.reasoningText ?? ""}${reasoningDelta}`
+                : reasoningDelta.length > 0
+                  ? reasoningDelta
+                  : previousMessage?.reasoningText;
           const nextAttachments =
             event.payload.attachments !== undefined
               ? yield* materializeAttachmentsForProjection({
@@ -1016,6 +1025,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             turnId: event.payload.turnId,
             role: event.payload.role,
             text: nextText,
+            ...(nextReasoningText !== undefined ? { reasoningText: nextReasoningText } : {}),
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             isStreaming: event.payload.streaming,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,

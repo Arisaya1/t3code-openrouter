@@ -1117,9 +1117,13 @@ function renderFeedEntry(
       );
     }
 
-    // Skip empty assistant messages (no text, no attachments) — they would
-    // render as an orphaned timestamp and break adjacent activity-group merging.
-    if (message.text.trim().length === 0 && attachments.length === 0) {
+    // Skip empty assistant messages (no text, no attachments, no reasoning) —
+    // they would render as an orphaned timestamp and break adjacent
+    // activity-group merging. A reasoning-only message is kept for its Thinking
+    // block.
+    const reasoningText = message.reasoningText;
+    const hasReasoning = reasoningText !== undefined && reasoningText.length > 0;
+    if (message.text.trim().length === 0 && attachments.length === 0 && !hasReasoning) {
       return null;
     }
 
@@ -1129,6 +1133,7 @@ function renderFeedEntry(
         className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")}
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
+        <AssistantReasoningBlock reasoning={message.reasoningText} />
         {message.text.trim().length > 0 ? (
           hasNativeSelectableMarkdownText() ? (
             <SelectableMarkdownText
@@ -1215,6 +1220,43 @@ const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly st
     </View>
   );
 });
+
+/**
+ * Collapsible model "Thinking" block for assistant messages (OpenRouter
+ * gateway models, Claude thinking, Codex reasoning). Collapsed by default to a
+ * "Thinking" row; expands in place to the full reasoning text. Mirrors the web
+ * timeline's reporting block.
+ */
+function AssistantReasoningBlock({ reasoning }: { reasoning: string | undefined }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!reasoning || reasoning.length === 0) {
+    return null;
+  }
+  return (
+    <View className="mb-1.5">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        onPress={() => setExpanded((value) => !value)}
+        className="flex-row items-center gap-1 py-1"
+      >
+        <Text className="font-t3-medium text-xs text-neutral-500 dark:text-neutral-400">
+          {expanded ? "▾" : "▸"}
+        </Text>
+        <Text className="font-t3-medium text-xs text-neutral-500 dark:text-neutral-400">
+          Thinking
+        </Text>
+      </Pressable>
+      {expanded ? (
+        <View className="rounded-xl bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
+          <Text className="text-[13px] leading-5 text-neutral-600 dark:text-neutral-400">
+            {reasoning}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
 
 function UserMessageContent(props: {
   readonly text: string;

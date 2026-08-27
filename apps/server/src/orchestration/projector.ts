@@ -516,12 +516,14 @@ export function projectEvent(
           return nextBase;
         }
 
+        const reasoningDelta = payload.reasoningDelta;
         const message: OrchestrationMessage = yield* decodeForEvent(
           OrchestrationMessage,
           {
             id: payload.messageId,
             role: payload.role,
             text: payload.text,
+            ...(reasoningDelta !== undefined ? { reasoningText: reasoningDelta } : {}),
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
@@ -543,6 +545,14 @@ export function projectEvent(
                       : message.text.length > 0
                         ? message.text
                         : entry.text,
+                    reasoningText:
+                      reasoningDelta !== undefined
+                        ? message.streaming
+                          ? `${entry.reasoningText ?? ""}${reasoningDelta}`
+                          : reasoningDelta.length > 0
+                            ? reasoningDelta
+                            : entry.reasoningText
+                        : entry.reasoningText,
                     streaming: message.streaming,
                     updatedAt: message.updatedAt,
                     turnId: message.turnId,
