@@ -53,6 +53,7 @@ import {
 import { fetchOpenRouterModels } from "../Layers/OpenRouterModels.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import * as ModelManifest from "../ModelManifest.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -109,6 +110,7 @@ export type ClaudeDriverEnv =
   | Crypto.Crypto
   | FileSystem.FileSystem
   | HttpClient.HttpClient
+  | ModelManifest.ModelManifest
   | Path.Path
   | ProviderEventLoggers
   | ServerConfig
@@ -243,6 +245,7 @@ const makeClaudeFamilyDriver = <TCredentials>(options: {
         const httpClient = yield* HttpClient.HttpClient;
         const serverSettings = yield* ServerSettingsService;
         const eventLoggers = yield* ProviderEventLoggers;
+        const modelManifest = yield* ModelManifest.ModelManifest;
         const baseProcessEnv = options.defaultProcessEnv?.(process.env) ?? process.env;
         const merged = mergeProviderInstanceEnvironment(environment, baseProcessEnv);
         // When the user puts their OpenRouter key in this instance's
@@ -363,18 +366,27 @@ const makeClaudeFamilyDriver = <TCredentials>(options: {
           : undefined;
 
         const checkProvider = Effect.gen(function* () {
+          // Kick the TTL-gated manifest refresh in the background and classify
+          // with the in-memory manifest, so a slow or hung fetch never delays
+          // the provider check. A refresh landing mid-probe applies on the next.
+          yield* modelManifest.refreshInBackground;
           const builtInModels = modelCatalogCache
             ? yield* Cache.get(modelCatalogCache, "catalog")
             : undefined;
-          const draft = yield* checkClaudeProviderStatus(
+          const probed = yield* checkClaudeProviderStatus(
             effectiveConfig,
             () => Cache.get(capabilitiesProbeCache, capabilitiesCacheKey),
             processEnv,
             cwd,
             builtInModels,
           );
-          if (!credentials || !credentialCache) return draft;
-          return credentials.apply(draft, yield* Cache.get(credentialCache, "credentials"));
+          const draft =
+            credentials && credentialCache
+              ? credentials.apply(probed, yield* Cache.get(credentialCache, "credentials"))
+              : probed;
+          // Keyed by driver kind, so the Anthropic legacy list marks Claude's
+          // catalogue and leaves OpenRouter's namespaced slugs untouched.
+          return ModelManifest.applyModelManifest(draft, yield* modelManifest.current, DRIVER_KIND);
         }).pipe(
           Effect.map(stampIdentity),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -393,7 +405,12 @@ const makeClaudeFamilyDriver = <TCredentials>(options: {
             streamSettings: snapshotSettings.streamSettings,
             haveSettingsChanged: haveProviderSnapshotSettingsChanged,
             initialSnapshot: (settings) =>
-              makePendingClaudeProvider(settings.provider).pipe(Effect.map(stampIdentity)),
+              Effect.zipWith(
+                makePendingClaudeProvider(settings.provider),
+                modelManifest.current,
+                (draft, manifest) =>
+                  stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
+              ),
             checkProvider,
             enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
               enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {

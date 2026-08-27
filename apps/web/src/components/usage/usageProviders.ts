@@ -2,39 +2,54 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 
 import { ClaudeAI, type Icon, OpenAI, OpenRouterIcon } from "../Icons";
 
-/**
- * Series and table order. The chart layers every provider from a shared zero
- * baseline, so this only fixes the reading order of legends, tables and hover
- * rows; it does not decide which series sits above the others.
- */
-export const PROVIDER_ORDER: readonly UsageProviderKind[] = ["codex", "openrouter", "claude"];
-
-export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-  openrouter: "OpenRouter",
+type UsageProviderPresentation = {
+  readonly label: string;
+  readonly color: string;
+  readonly mark: Icon;
 };
 
 /**
- * Claude's brand orange against a neutral white for Codex, and OpenRouter's
- * violet. OpenRouter's own mark is monochrome, which would be indistinguishable
- * from Codex's neutral once it is a band rather than a logo.
- */
-export const PROVIDER_COLOR: Record<UsageProviderKind, string> = {
-  claude: "#d97757",
-  codex: "#e6e6e6",
-  openrouter: "#8b7fe8",
-};
-
-/**
- * Brand marks, reused from the provider picker.
+ * Exhaustive presentation for providers supported by the usage contract.
+ * Declaration order is reused by every chart and table, so adding a provider
+ * only requires its contract support and one entry here.
  *
- * Claude's and OpenAI's ship their own fills (`#d97757`, white on dark), which
- * are the same colours as the chart bands, so swapping a colour dot for a mark
- * keeps the series association intact rather than trading it away.
+ * OpenRouter carries a violet of its own rather than its brand mark's colour:
+ * that mark is monochrome, and as a chart band it would be indistinguishable
+ * from Codex's neutral.
  */
-export const PROVIDER_MARK: Record<UsageProviderKind, Icon> = {
-  claude: ClaudeAI,
-  codex: OpenAI,
-  openrouter: OpenRouterIcon,
-};
+export const PROVIDER_PRESENTATION = {
+  codex: {
+    label: "Codex",
+    color: "var(--contrast-foreground)",
+    mark: OpenAI,
+  },
+  openrouter: {
+    label: "OpenRouter",
+    color: "#8b7fe8",
+    mark: OpenRouterIcon,
+  },
+  claude: {
+    label: "Claude Code",
+    color: "#d97757",
+    mark: ClaudeAI,
+  },
+} satisfies Record<UsageProviderKind, UsageProviderPresentation>;
+
+/** Stable provider reading order across charts, summaries, tables, and hover rows. */
+export const PROVIDER_ORDER = Object.keys(PROVIDER_PRESENTATION) as UsageProviderKind[];
+
+/** Providers with real activity, independent of the metric currently displayed. */
+export function providersWithUsage(
+  totals: readonly {
+    readonly provider: UsageProviderKind;
+    readonly costUsd: number;
+    readonly totalTokens: number;
+  }[],
+): readonly UsageProviderKind[] {
+  const active = new Set(
+    totals
+      .filter((entry) => entry.totalTokens > 0 || entry.costUsd > 0)
+      .map((entry) => entry.provider),
+  );
+  return PROVIDER_ORDER.filter((provider) => active.has(provider));
+}
